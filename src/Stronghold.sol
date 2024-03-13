@@ -3,7 +3,14 @@ pragma solidity ^0.8.0;
 
 contract Stronghold {
 
-    constructor() {
+    constructor(
+        /**
+        - pair factory
+        - linear curve
+        - xyk curve
+        - yes token
+         */
+    ) {
     }
 
     /* 
