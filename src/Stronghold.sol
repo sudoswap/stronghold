@@ -5,9 +5,10 @@ import {LSSVMPair} from "lssvm2/LSSVMPair.sol";
 import {ICurve} from "lssvm2/bonding-curves/ICurve.sol";
 import {IPairHooks} from "lssvm2/hooks/IPairHooks.sol";
 
-import {IERC721} from "openzeppelin-contracts/contracts/token/ERC721/IERC721.sol";
 import {ERC2981} from "openzeppelin-contracts/contracts/token/common/ERC2981.sol";
 import {IERC2981} from "openzeppelin-contracts/contracts/interfaces/IERC2981.sol";
+import {IERC721} from "openzeppelin-contracts/contracts/token/ERC721/IERC721.sol";
+import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 
 import {ERC20} from "solmate/tokens/ERC20.sol";
 
@@ -18,7 +19,7 @@ import {PairFactoryLike} from "./PairFactoryLike.sol";
 contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
 
     /*//////////////////////////////////////////////////////////////
-                  Struct
+                  Structs
     //////////////////////////////////////////////////////////////*/
 
     struct OwnerOfWithData {
@@ -39,12 +40,37 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
                     Constants x Immutables
     //////////////////////////////////////////////////////////////*/
 
+    // Launch configs
+    uint256 constant INITIAL_LAUNCH_SUPPLY = 1000;
+
+    // General configs
     uint256 constant TRANSFER_DELAY = 7 days;
     uint96 constant ROYALTY_BPS = 250;
 
+    // Floor pool configs
+    uint128 constant FLOOR_DELTA = 1 ether;
+    uint128 constant FLOOR_SPOT_PRICE = 1 ether;
+    uint128 constant FLOOR_INITIAL_TOKEN_BALANCE = 10 ether;
+
+    // Anchor pool configs
     uint128 constant ANCHOR_DELTA = 1 ether;
     uint128 constant ANCHOR_SPOT_PRICE = 100 ether;
+    uint256 constant ANCHOR_INITIAL_SUPPLY = 500;
 
+    // Trade pool configs
+    uint128 constant TRADE_INITIAL_SUPPLY = 3500;
+    uint128 constant TRADE_DELTA = TRADE_INITIAL_SUPPLY; // Represents NFT amount
+    uint128 constant TRADE_SPOT_PRICE = ANCHOR_SPOT_PRICE * TRADE_DELTA * 2; // Starts at 2x the price of the anchor
+
+    // Collection configs
+    uint256 constant TOTAL_SUPPLY = INITIAL_LAUNCH_SUPPLY + ANCHOR_INITIAL_SUPPLY + TRADE_INITIAL_SUPPLY;
+
+    // Fee configs
+    uint256 FLOOR_DENOM = 3;
+    uint256 ANCHOR_DENOM = 3;
+    uint256 TRADE_DENOM = 3;
+
+    // Sudo configs
     ICurve immutable LINEAR_CURVE;
     ICurve immutable XYK_CURVE;
     address immutable QUOTE_TOKEN;
@@ -126,14 +152,32 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
         uint256 _tokensOutProtocolFee,
         uint256 _tokensOutRoyalty,
         uint256[] calldata _nftsIn
-    ) external {}
+    ) external {
+        // TODO
+    }
 
     function afterSwapNFTOutPair(
         uint256 _tokensIn,
         uint256 _tokensInProtocolFee,
         uint256 _tokensInRoyalty,
         uint256[] calldata _nftsOut
-    ) external {}
+    ) external {
+        // TODO
+    }
+
+    // Intended to be called by `afterSwapNFTInPair` and `afterSwapNFTOutPair`
+    // but can also be called manually if needed
+    function distroFees(uint256 royaltyAmount, address quoteToken) public {
+
+        // Send to floor pool, and update price
+        uint256 floorDeposit = royaltyAmount / FLOOR_DENOM;
+        IERC20(quoteToken).transfer(floorPool, floorDeposit);
+        uint128 newSpotPrice = uint128(LSSVMPair(floorPool).spotPrice() + floorDeposit / TOTAL_SUPPLY);
+        LSSVMPair(floorPool).changeSpotPrice(newSpotPrice);
+
+        // TODO: update anchor balance
+        // TODO: update trade pool balance
+    }
 
     // Everything else is a no-op
     function afterNewPair() external {}
@@ -148,13 +192,13 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
                       Mint x Pool 
     //////////////////////////////////////////////////////////////*/
 
-    function _mint(address to, uint256[] memory ids) internal virtual {
-        uint256 numIds = ids.length;
+    function _mint(address to, uint256 startInclusive, uint256 endExclusive) internal virtual {
+        uint256 numIds = endExclusive - startInclusive;
         unchecked {
             _balanceOf[to] += numIds;
         }
         for (uint256 i; i < numIds;) {
-            uint256 id = ids[i];
+            uint256 id = startInclusive + i;
             ownerOfWithData[id].owner = to;
             emit Transfer(address(0), to, id);
             unchecked {
@@ -163,6 +207,31 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
         }
     }
 
+    // Creates a 0-delta floor pool
+    function initFloorPool() public {
+        require(floorPool == address(0));
+        uint256[] memory empty = new uint256[](0);
+
+        // Approve factory
+        IERC20(QUOTE_TOKEN).approve(SUDO_FACTORY, FLOOR_INITIAL_TOKEN_BALANCE);
+
+        // Create pool
+        floorPool = address(PairFactoryLike(SUDO_FACTORY).createPairERC721ERC20(PairFactoryLike.CreateERC721ERC20PairParams({
+            token: ERC20(QUOTE_TOKEN),
+            nft: IERC721(address(this)),
+            bondingCurve: LINEAR_CURVE,
+            assetRecipient: payable(address(0)),
+            poolType: LSSVMPair.PoolType.TRADE,
+            delta: 0,
+            fee: 0,
+            spotPrice: FLOOR_SPOT_PRICE,
+            propertyChecker: address(0),
+            initialNFTIDs: empty,
+            initialTokenBalance: FLOOR_INITIAL_TOKEN_BALANCE
+        })));
+    }
+
+    // Create linear pool that gets adjusted
     function initAnchorPool() public {
         require(anchorPool == address(0));
         uint256[] memory empty = new uint256[](0);
@@ -180,15 +249,33 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
             initialTokenBalance: 0
         })));
 
-        // TODO: mint to anchor pool
-    }
+        // Mint to anchor pool
+        _mint(anchorPool, INITIAL_LAUNCH_SUPPLY + 1, INITIAL_LAUNCH_SUPPLY + ANCHOR_INITIAL_SUPPLY);
 
-    function initFloorPool() public {
-        require(floorPool == address(0));
+        // TODO: sync ids for anchor pool (?)
     }
     
     function initTradePool() public {
         require(tradePool == address(0));
+        uint256[] memory empty = new uint256[](0);
+        tradePool = address(PairFactoryLike(SUDO_FACTORY).createPairERC721ERC20(PairFactoryLike.CreateERC721ERC20PairParams({
+            token: ERC20(QUOTE_TOKEN),
+            nft: IERC721(address(this)),
+            bondingCurve: LINEAR_CURVE,
+            assetRecipient: payable(address(0)),
+            poolType: LSSVMPair.PoolType.TRADE,
+            delta: TRADE_DELTA,
+            fee: 0,
+            spotPrice: TRADE_SPOT_PRICE,
+            propertyChecker: address(0),
+            initialNFTIDs: empty,
+            initialTokenBalance: 0
+        })));
+
+        // Mint to trade pool
+        _mint(anchorPool, INITIAL_LAUNCH_SUPPLY + ANCHOR_INITIAL_SUPPLY + 1, INITIAL_LAUNCH_SUPPLY + ANCHOR_INITIAL_SUPPLY + TRADE_INITIAL_SUPPLY);
+
+        // TODO: sync ids for anchor pool (?)
     }
 
     /*//////////////////////////////////////////////////////////////
