@@ -15,7 +15,6 @@ import {ERC20} from "solmate/tokens/ERC20.sol";
 import {ERC721Minimal} from "./ERC721Minimal.sol";
 import {PairFactoryLike} from "./PairFactoryLike.sol";
 
-// Is also IPairHooks
 contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
 
     /*//////////////////////////////////////////////////////////////
@@ -27,14 +26,30 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
         uint96 lastTransferTimestamp;
     }
 
+    struct Loan {
+        uint256[] idsDeposited;
+        uint256 loanExpiry;
+        uint256 principalOwed;
+        uint256 interestOwed;
+    }
+
     /*//////////////////////////////////////////////////////////////
-                       Error
+                       Errors
     //////////////////////////////////////////////////////////////*/
 
     error Cooldown();
     error NoZero();
     error WrongFrom();
     error Unauth();
+    error LoanTooLong();
+    error TooEarlyToSieze();
+
+    /*//////////////////////////////////////////////////////////////
+                       Events
+    //////////////////////////////////////////////////////////////*/
+
+    event LoanOrigination(uint256[] ids, uint256 principalOwed, uint256 interestOwed, uint256 duration);
+    event LoanClosure(uint256[] ids, uint256 principalOwed, uint256 interestOwed, address loanCloser);
 
     /*//////////////////////////////////////////////////////////////
                     Constants x Immutables
@@ -66,11 +81,19 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
     uint256 constant TOTAL_SUPPLY = INITIAL_LAUNCH_SUPPLY + ANCHOR_INITIAL_SUPPLY + TRADE_INITIAL_SUPPLY;
 
     // Fee configs
-    uint256 FLOOR_DENOM = 3;
-    uint256 ANCHOR_DENOM = 3;
-    uint256 TRADE_DENOM = 3;
+    uint256 constant FLOOR_DENOM = 3;
+    uint256 constant ANCHOR_DENOM = 3;
+    uint256 constant TRADE_DENOM = 3;
 
-    // Sudo configs
+    // Loan configs
+    uint256 constant LOAN_NUM = 95; // 95% ltv relative to floor
+    uint256 constant LOAN_DENOM = 100;
+    uint256 constant MAX_LOAN_DURATION = 84 days;
+    uint256 constant INTEREST_NUM = 2; // Approx 0.02% a day in interest
+    uint256 constant INTEREST_DENOM = 864000000; 
+    uint256 constant LOAN_GRACE_PERIOD = 1 days;
+
+    // Sudo immutable configs
     ICurve immutable LINEAR_CURVE;
     ICurve immutable XYK_CURVE;
     address immutable QUOTE_TOKEN;
@@ -81,6 +104,7 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
     //////////////////////////////////////////////////////////////*/
 
     mapping(uint256 => OwnerOfWithData) public ownerOfWithData;
+    mapping(address => Loan) public loanForUser;
 
     address public floorPool;
     address public tradePool;
@@ -107,86 +131,63 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
         _setDefaultRoyalty(address(this), ROYALTY_BPS);
     }
 
-    /* 
-    
-    Initial mint / claim
-    - users (need to check if on list) deposit $YES
-    - users claim their NFTs
-
-    Initial launch parameters:
-    - 1000 (initial claim)
-    - 500 (linear)
-    - 3500 (trading)
-
-    Initialize pools
-    - create floor pool
-    - create anchor pool
-    - create trading pool
-
-    Rebalance (on fees accrued)
-    - recalculate RFV, move floor pool up
-    - move anchor pool up (?)
-    - deepen liquidity on the trading pool
-
-    Loan
-    - up to 7 days (?)
-    - deposit NFT, get out $YES (below RFV)
-    - needs to repay within 7 days, or anyone can liquidate (NFT goes back into either anchor or xyk pool), rfv is updated
-
-    Margin
-    - same as loan, except it optimistically fronts the $YES first, takes $YES from the caller, then buys an NFT from a pool
-    - turns into the same loan
-    - each address can have 1 loan open at a time to simplify things
-
-    Bond (?)
-    - have some amount of NFTs in reserve, look into ETH<>NFT pairings later (maybe even a sibling collection or smth)
-
-    */
-
-     /*//////////////////////////////////////////////////////////////
-                     Pair Hooks
+    /*//////////////////////////////////////////////////////////////
+                     Pair Hook x Rebalance Logic
     //////////////////////////////////////////////////////////////*/
 
     function afterSwapNFTInPair(
-        uint256 _tokensOut,
-        uint256 _tokensOutProtocolFee,
+        uint256 ,
+        uint256 ,
         uint256 _tokensOutRoyalty,
-        uint256[] calldata _nftsIn
+        uint256[] calldata 
     ) external {
-        // TODO
+
+        // Auto rebalance on swaps if coming from floor/anchor/trade pool
+        if (msg.sender == floorPool || msg.sender == anchorPool || msg.sender == tradePool) {
+            distributeFees(_tokensOutRoyalty);
+        }
+
     }
 
     function afterSwapNFTOutPair(
-        uint256 _tokensIn,
-        uint256 _tokensInProtocolFee,
+        uint256 ,
+        uint256 ,
         uint256 _tokensInRoyalty,
-        uint256[] calldata _nftsOut
+        uint256[] calldata 
     ) external {
-        // TODO
+
+        // Auto rebalance on swaps if coming from floor/anchor/trade pool
+        if (msg.sender == floorPool || msg.sender == anchorPool || msg.sender == tradePool) {
+            distributeFees(_tokensInRoyalty);
+        }
     }
 
     // Intended to be called by `afterSwapNFTInPair` and `afterSwapNFTOutPair`
     // but can also be called manually if needed
-    function distroFees(uint256 royaltyAmount, address quoteToken) public {
+    function distributeFees(uint256 royaltyAmount) public {
 
         // Send to floor pool, and update price
-        uint256 floorDeposit = royaltyAmount / FLOOR_DENOM;
-        IERC20(quoteToken).transfer(floorPool, floorDeposit);
-        uint128 newSpotPrice = uint128(LSSVMPair(floorPool).spotPrice() + floorDeposit / TOTAL_SUPPLY);
-        LSSVMPair(floorPool).changeSpotPrice(newSpotPrice);
+        {
+            uint256 floorDeposit = royaltyAmount / FLOOR_DENOM;
+            IERC20(QUOTE_TOKEN).transfer(floorPool, floorDeposit);
+            uint128 newSpotPrice = uint128(LSSVMPair(floorPool).spotPrice() + floorDeposit / TOTAL_SUPPLY);
+            LSSVMPair(floorPool).changeSpotPrice(newSpotPrice);
+        }
 
-        // TODO: update anchor balance
-        // TODO: update trade pool balance
+        // Send to anchor pool, no price update
+        {
+            uint256 anchorDeposit = royaltyAmount / ANCHOR_DENOM;
+            IERC20(QUOTE_TOKEN).transfer(anchorPool, anchorDeposit);
+        }
+
+        // Send to trade pool, update price
+        {
+            uint256 tradeDeposit = royaltyAmount / TRADE_DENOM;
+            IERC20(QUOTE_TOKEN).transfer(tradePool, tradeDeposit);
+            uint128 newSpotPrice = uint128(LSSVMPair(tradePool).spotPrice() + tradeDeposit);
+            LSSVMPair(tradePool).changeSpotPrice(newSpotPrice);
+        }
     }
-
-    // Everything else is a no-op
-    function afterNewPair() external {}
-    function afterDeltaUpdate(uint128 _oldDelta, uint128 _newDelta) external {}
-    function afterSpotPriceUpdate(uint128 _oldSpotPrice, uint128 _newSpotPrice) external {}
-    function afterFeeUpdate(uint96 _oldFee, uint96 _newFee) external {}
-    function afterNFTWithdrawal(uint256[] calldata _nftsOut) external {}
-    function afterTokenWithdrawal(uint256 _tokensOut) external {}
-    function syncForPair(address pairAddress, uint256 _tokensIn, uint256[] calldata _nftsIn) external {}
 
     /*//////////////////////////////////////////////////////////////
                       Mint x Pool 
@@ -279,6 +280,100 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
     }
 
     /*//////////////////////////////////////////////////////////////
+                      Borrow x Margin
+    //////////////////////////////////////////////////////////////*/
+
+    function borrow(uint256[] calldata idsToDeposit, uint256 loanDurationInSeconds) external returns (uint256) {
+        
+        // Check if loan duration is too long
+        if (loanDurationInSeconds > MAX_LOAN_DURATION) {
+            revert LoanTooLong();
+        }
+
+        // Take NFTs from caller
+        uint256 numToDeposit = idsToDeposit.length;
+        for (uint i; i < numToDeposit; ++i) {
+            IERC721(address(this)).transferFrom(msg.sender, address(this), idsToDeposit[i]);
+        }
+
+        // Calculate loan and interest amount
+        uint256 loanAmount = getLoanAmount(numToDeposit);
+        uint256 interestAmount = getInterestOwed(loanAmount, loanDurationInSeconds);
+
+        // Withdraw and send the loan (minus interest) to the caller
+        LSSVMPair(floorPool).withdrawERC20(ERC20(QUOTE_TOKEN), loanAmount);
+        ERC20(QUOTE_TOKEN).transfer(msg.sender, loanAmount);
+
+        // Store the loan data
+        loanForUser[msg.sender] = Loan({
+            idsDeposited: idsToDeposit,
+            loanExpiry: block.timestamp + loanDurationInSeconds,
+            principalOwed: loanAmount,
+            interestOwed: interestAmount
+        });
+        
+        emit LoanOrigination(idsToDeposit, loanAmount, interestAmount, loanDurationInSeconds);
+    }
+
+    // TODO
+    function borrowWithMargin(uint256[] calldata idsToBuyAndDeposit, uint256 loanDurationInSeconds) external {
+
+    }
+
+    // Allows a user to repay their own loan
+    function repay() external {
+        _repayLoanForUser(msg.sender, msg.sender);
+    }
+
+    // Anyone can close an open loan if it's expired and past the grace period
+    function seizeLoan(address loanOriginator) external {
+
+        Loan memory userLoan = loanForUser[loanOriginator]; 
+
+        // Can only sieze loan if it's past the expiry + grace period
+        if (block.timestamp < userLoan.loanExpiry + LOAN_GRACE_PERIOD) {
+            revert TooEarlyToSieze();
+        }
+
+        _repayLoanForUser(loanOriginator, msg.sender);
+    }
+
+    function _repayLoanForUser(address loanOriginator, address loanCloser) internal {
+
+        // Get loan amount owed by loanOriginator
+        Loan memory userLoan = loanForUser[loanOriginator]; 
+        uint256 amountToRepay = userLoan.interestOwed + userLoan.principalOwed;
+
+        // Take repayment from loanCloser
+        ERC20(QUOTE_TOKEN).transferFrom(loanCloser, address(this), amountToRepay);
+
+        // Send original amount back to the floor pool
+        ERC20(QUOTE_TOKEN).transfer(floorPool, userLoan.principalOwed);
+
+        // Interest owed is used as fees to redistribute
+        distributeFees(userLoan.interestOwed);
+
+        // Send NFTs back to the loanCloser
+        for (uint i; i < userLoan.idsDeposited.length; ++i) {
+            IERC721(address(this)).transferFrom(address(this), loanCloser, userLoan.idsDeposited[i]);
+        }
+
+        // Clear out the user's loan info
+        delete loanForUser[loanOriginator];
+
+        emit LoanClosure(userLoan.idsDeposited, userLoan.principalOwed, userLoan.interestOwed, loanCloser);
+    }
+
+    // 
+    function getLoanAmount(uint256 numNFTsToDeposit) public view returns (uint256 loanAmount) {
+        loanAmount = (LSSVMPair(floorPool).spotPrice() * numNFTsToDeposit * LOAN_NUM) / LOAN_DENOM;
+    }
+
+    function getInterestOwed(uint256 loanAmount, uint256 loanDurationInSeconds) public pure returns (uint256 interestOwed) {
+        interestOwed = (loanAmount * loanDurationInSeconds * INTEREST_NUM) / INTEREST_DENOM;
+    }
+
+    /*//////////////////////////////////////////////////////////////
                    IERC721 Compliance
     //////////////////////////////////////////////////////////////*/
 
@@ -299,6 +394,7 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
         owner = ownerOfWithData[id].owner;
     }
 
+    // Transfers that are not to or from a sudoswap pool (or this address (for loans)) incur a 7 day delay
     function transferFrom(address from, address to, uint256 id) public override {
         if (from != ownerOf(id)) {
             revert WrongFrom();
@@ -350,4 +446,13 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
         }
         emit Transfer(from, to, id);
     }
+
+    // Everything else is a no-op, just for hook compatibility
+    function afterNewPair() external {}
+    function afterDeltaUpdate(uint128 , uint128 ) external {}
+    function afterSpotPriceUpdate(uint128 , uint128 ) external {}
+    function afterFeeUpdate(uint96 , uint96 ) external {}
+    function afterNFTWithdrawal(uint256[] calldata ) external {}
+    function afterTokenWithdrawal(uint256 ) external {}
+    function syncForPair(address , uint256 , uint256[] calldata ) external {}
 }
