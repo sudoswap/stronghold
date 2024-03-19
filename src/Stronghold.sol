@@ -283,7 +283,7 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
                       Borrow x Margin
     //////////////////////////////////////////////////////////////*/
 
-    function borrow(uint256[] calldata idsToDeposit, uint256 loanDurationInSeconds) external returns (uint256) {
+    function borrow(uint256[] calldata idsToDeposit, uint256 loanDurationInSeconds, address loanOwner) external returns (uint256 loanAmount) {
         
         // Check if loan duration is too long
         if (loanDurationInSeconds > MAX_LOAN_DURATION) {
@@ -297,7 +297,7 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
         }
 
         // Calculate loan and interest amount
-        uint256 loanAmount = getLoanAmount(numToDeposit);
+        loanAmount = getLoanAmount(numToDeposit);
         uint256 interestAmount = getInterestOwed(loanAmount, loanDurationInSeconds);
 
         // Withdraw and send the loan (minus interest) to the caller
@@ -305,7 +305,7 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
         ERC20(QUOTE_TOKEN).transfer(msg.sender, loanAmount);
 
         // Store the loan data
-        loanForUser[msg.sender] = Loan({
+        loanForUser[loanOwner] = Loan({
             idsDeposited: idsToDeposit,
             loanExpiry: block.timestamp + loanDurationInSeconds,
             principalOwed: loanAmount,
@@ -313,11 +313,6 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
         });
         
         emit LoanOrigination(idsToDeposit, loanAmount, interestAmount, loanDurationInSeconds);
-    }
-
-    // TODO
-    function borrowWithMargin(uint256[] calldata idsToBuyAndDeposit, uint256 loanDurationInSeconds) external {
-
     }
 
     // Allows a user to repay their own loan
