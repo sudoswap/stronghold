@@ -208,6 +208,11 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
         }
     }
 
+    // TODO: initial mint function
+    function mint(uint256 amount) external {
+        
+    }
+
     // Creates a 0-delta floor pool
     function initFloorPool() public {
         require(floorPool == address(0));
