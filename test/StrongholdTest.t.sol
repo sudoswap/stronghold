@@ -64,9 +64,42 @@ contract StrongholdTest is Test {
         );
     }
 
-    function test_foo() public {
+    /**
+        minting
+        - allowed user can mint
+        - disallowed user cannot mint
+
+        swapping
+        - can buy linear
+        - check rebalance logic after linear pool is breached
+        - can buy trade pool after
+        - swaps add to the pool invariants
+
+        rebalancing
+        - check more specific rebalancing logic
+
+        borrowing
+        - user can borrow
+        - user cannot borrow more
+        - user cannot borrow ids they do not have
+        - user can swap and borrow
+        - user cannot swap and borrow if it leaves the flash loaner insolvent
+        - user can repay loan if late
+        - user can repay loan if early
+        - another user can liquidate loan if late
+        - another user cannot liquidate loan if late
+     */
+
+    function test_allowedMintSucceeds() public {
         
     }
 
+    function test_disallowedMintFails() public {
+        
+    }
+
+    function test_extraAllocForAllowedSucceeds() public {
+        
+    }
 
 }
