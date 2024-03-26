@@ -1,4 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0
+
+/* solhint-disable private-vars-leading-underscore */
+/* solhint-disable var-name-mixedcase */
+/* solhint-disable func-param-name-mixedcase */
+/* solhint-disable no-unused-vars */
+
 pragma solidity ^0.8.0;
 
 import {LSSVMPair} from "lssvm2/LSSVMPair.sol";
@@ -9,6 +15,7 @@ import {ERC2981} from "openzeppelin-contracts/contracts/token/common/ERC2981.sol
 import {IERC2981} from "openzeppelin-contracts/contracts/interfaces/IERC2981.sol";
 import {IERC721} from "openzeppelin-contracts/contracts/token/ERC721/IERC721.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
 import {ERC20} from "solmate/tokens/ERC20.sol";
 
@@ -36,8 +43,12 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
     /*//////////////////////////////////////////////////////////////
                        Errors
     //////////////////////////////////////////////////////////////*/
-
+    
+    error NotOnList();
+    error TooMany();
     error Cooldown();
+    error PoolAlreadyExists();
+    error InitialMintIncomplete();
     error NoZero();
     error WrongFrom();
     error Unauth();
@@ -56,24 +67,25 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
     //////////////////////////////////////////////////////////////*/
 
     // Launch configs
-    uint256 constant INITIAL_LAUNCH_SUPPLY = 1000;
+    uint256 constant INITIAL_LAUNCH_SUPPLY = 10;
+    uint256 constant INITIAL_LAUNCH_PRICE = 1 ether;
+    bytes32 immutable MERKLE_ROOT;
 
     // General configs
     uint256 constant TRANSFER_DELAY = 7 days;
     uint96 constant ROYALTY_BPS = 250;
 
     // Floor pool configs
-    uint128 constant FLOOR_DELTA = 1 ether;
     uint128 constant FLOOR_SPOT_PRICE = 1 ether;
-    uint128 constant FLOOR_INITIAL_TOKEN_BALANCE = 10 ether;
+    uint256 constant FLOOR_INITIAL_TOKEN_BALANCE = INITIAL_LAUNCH_SUPPLY * INITIAL_LAUNCH_PRICE;
 
     // Anchor pool configs
     uint128 constant ANCHOR_DELTA = 1 ether;
-    uint128 constant ANCHOR_SPOT_PRICE = 100 ether;
-    uint256 constant ANCHOR_INITIAL_SUPPLY = 500;
+    uint128 constant ANCHOR_SPOT_PRICE = 2 ether;
+    uint256 constant ANCHOR_INITIAL_SUPPLY = 5;
 
     // Trade pool configs
-    uint128 constant TRADE_INITIAL_SUPPLY = 3500;
+    uint128 constant TRADE_INITIAL_SUPPLY = 35;
     uint128 constant TRADE_DELTA = TRADE_INITIAL_SUPPLY; // Represents NFT amount
     uint128 constant TRADE_SPOT_PRICE = ANCHOR_SPOT_PRICE * TRADE_DELTA * 2; // Starts at 2x the price of the anchor
 
@@ -110,6 +122,8 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
     address public tradePool;
     address public anchorPool;
 
+    uint256 public totalSupply;
+
     /*//////////////////////////////////////////////////////////////
                        Constructor
     //////////////////////////////////////////////////////////////*/
@@ -118,16 +132,14 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
         ICurve _LINEAR_CURVE,
         ICurve _XYK_CURVE,
         address _QUOTE_TOKEN,
-        address _SUDO_FACTORY
+        address _SUDO_FACTORY,
+        bytes32 _MERKLE_ROOT
     ) ERC721Minimal("Stronghold", "HODL") {
-
-        // Init immutable curve variables
         LINEAR_CURVE = _LINEAR_CURVE;
         XYK_CURVE = _XYK_CURVE;
         QUOTE_TOKEN = _QUOTE_TOKEN;
         SUDO_FACTORY = _SUDO_FACTORY;
-
-        // Init royalty
+        MERKLE_ROOT = _MERKLE_ROOT;
         _setDefaultRoyalty(address(this), ROYALTY_BPS);
     }
 
@@ -208,14 +220,37 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
         }
     }
 
-    // TODO: initial mint function
-    function mint(uint256 amount) external {
-        
+    function mint(uint256 amountToMint, bytes32[] calldata proof) external {
+        // Verify caller is allowed
+        if (!MerkleProof.verify(proof, MERKLE_ROOT, keccak256(abi.encodePacked(msg.sender)))) {
+            revert NotOnList();
+        }
+        if (totalSupply + amountToMint > INITIAL_LAUNCH_SUPPLY) {
+            revert TooMany();
+        }
+
+        // Take in input tokens
+        uint256 mintPrice = INITIAL_LAUNCH_PRICE * amountToMint;
+        IERC20(QUOTE_TOKEN).transferFrom(msg.sender, address(this), mintPrice);
+
+        // Mint to caller
+        uint256 prevTotalSupply = totalSupply;
+        _mint(msg.sender, prevTotalSupply, prevTotalSupply + amountToMint);
+
+        // Update total supply
+        totalSupply += amountToMint;
     }
 
     // Creates a 0-delta floor pool
     function initFloorPool() public {
-        require(floorPool == address(0));
+
+        if (floorPool != address(0)) {
+            revert PoolAlreadyExists();
+        }
+        if (totalSupply < INITIAL_LAUNCH_SUPPLY) {
+            revert InitialMintIncomplete();
+        }
+
         uint256[] memory empty = new uint256[](0);
 
         // Approve factory
@@ -235,11 +270,21 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
             initialNFTIDs: empty,
             initialTokenBalance: FLOOR_INITIAL_TOKEN_BALANCE
         })));
+
+        // Zero out token approval
+        IERC20(QUOTE_TOKEN).approve(SUDO_FACTORY, 0);
     }
 
     // Create linear pool that gets adjusted
     function initAnchorPool() public {
-        require(anchorPool == address(0));
+
+        if (anchorPool != address(0)) {
+            revert PoolAlreadyExists();
+        }
+        if (totalSupply < INITIAL_LAUNCH_SUPPLY) {
+            revert InitialMintIncomplete();
+        }
+
         uint256[] memory empty = new uint256[](0);
         anchorPool = address(PairFactoryLike(SUDO_FACTORY).createPairERC721ERC20(PairFactoryLike.CreateERC721ERC20PairParams({
             token: ERC20(QUOTE_TOKEN),
@@ -258,11 +303,21 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
         // Mint to anchor pool
         _mint(anchorPool, INITIAL_LAUNCH_SUPPLY + 1, INITIAL_LAUNCH_SUPPLY + ANCHOR_INITIAL_SUPPLY);
 
+        // Update total supply
+        totalSupply += ANCHOR_INITIAL_SUPPLY;
+
         // TODO: sync ids for anchor pool (?)
     }
     
     function initTradePool() public {
-        require(tradePool == address(0));
+
+        if (tradePool != address(0)) {
+            revert PoolAlreadyExists();
+        }
+        if (totalSupply < INITIAL_LAUNCH_SUPPLY) {
+            revert InitialMintIncomplete();
+        }
+
         uint256[] memory empty = new uint256[](0);
         tradePool = address(PairFactoryLike(SUDO_FACTORY).createPairERC721ERC20(PairFactoryLike.CreateERC721ERC20PairParams({
             token: ERC20(QUOTE_TOKEN),
@@ -280,6 +335,9 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
 
         // Mint to trade pool
         _mint(anchorPool, INITIAL_LAUNCH_SUPPLY + ANCHOR_INITIAL_SUPPLY + 1, INITIAL_LAUNCH_SUPPLY + ANCHOR_INITIAL_SUPPLY + TRADE_INITIAL_SUPPLY);
+
+        // Update total supply
+        totalSupply += TRADE_INITIAL_SUPPLY;
 
         // TODO: sync ids for anchor pool (?)
     }

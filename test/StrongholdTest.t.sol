@@ -1,5 +1,12 @@
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+// SPDX-License-Identifier: AGPL-3.0
+
+/* solhint-disable private-vars-leading-underscore */
+/* solhint-disable var-name-mixedcase */
+/* solhint-disable func-param-name-mixedcase */
+/* solhint-disable no-unused-vars */
+/* solhint-disable func-name-mixedcase */
+
+pragma solidity ^0.8.0;
 
 import "forge-std/Test.sol";
 
@@ -30,6 +37,13 @@ contract StrongholdTest is Test {
     Test20 quoteToken;
     Stronghold stronghold;
 
+    address constant ALICE = address(123);
+    address constant BOB = address(456);
+    address constant CAROL = address(789);
+
+    uint256 constant LARGE_TOKEN_AMOUNT = 1000000 ether;
+    bytes32[] proof;
+
     function setUp() public {
         
         // Initialize sudo factory
@@ -55,19 +69,53 @@ contract StrongholdTest is Test {
         // Initialize quote token
         quoteToken = new Test20();
 
+        // Init allow list
+        // Create merkle tree
+        address[2] memory allowedUsers = [ALICE, BOB];
+        bytes32[] memory hashes = new bytes32[](3);
+        hashes[0] = keccak256(abi.encodePacked(allowedUsers[0]));
+        hashes[1] = keccak256(abi.encodePacked(allowedUsers[1]));
+        hashes[2] = keccak256(abi.encodePacked(hashes[1], hashes[0]));
+
+        // Create encoded merkle proof list
+        proof = new bytes32[](1);
+        proof[0] = hashes[1];
+
         // Init stronghold
         stronghold = new Stronghold(
             linearCurve,
             xykCurve,
             address(quoteToken),
-            address(pairFactory)
+            address(pairFactory),
+            hashes[2]
         );
+
+        // Mint enough tokens to ALICE, BOB, CAROL
+        // Approve Stronghold for each
+        quoteToken.mint(ALICE, LARGE_TOKEN_AMOUNT);
+        quoteToken.mint(BOB, LARGE_TOKEN_AMOUNT);        
+        quoteToken.mint(CAROL, LARGE_TOKEN_AMOUNT);
+
+        vm.startPrank(ALICE);
+        quoteToken.approve(address(stronghold), LARGE_TOKEN_AMOUNT);
+        vm.stopPrank();        
+        
+        vm.startPrank(BOB);
+        quoteToken.approve(address(stronghold), LARGE_TOKEN_AMOUNT);
+        vm.stopPrank();
+
+        vm.startPrank(CAROL);
+        quoteToken.approve(address(stronghold), LARGE_TOKEN_AMOUNT);
+        vm.stopPrank();
     }
 
     /**
         minting
-        - allowed user can mint
-        - disallowed user cannot mint
+        - allowed user can mint [x]
+        - disallowed user cannot mint [x]
+
+        pools
+        - can deploy pools after minting out (is this a prereq?)
 
         swapping
         - can buy linear
@@ -90,16 +138,90 @@ contract StrongholdTest is Test {
         - another user cannot liquidate loan if late
      */
 
-    function test_allowedMintSucceeds() public {
-        
+    function test_allowedMintSucceedsWithEnoughBalance() public {
+
+        // Prank as ALICE
+        vm.startPrank(ALICE);
+
+        // Attempt to mint 1 token
+        stronghold.mint(1, proof);
+
+        // Assert ALICE has balance of 1
+        assertEq(stronghold.balanceOf(ALICE), 1);
+
+        // Assert that stronghold has INITIAL_INITIAL_LAUNCH_PRICE tokens
+        assertEq(quoteToken.balanceOf(address(stronghold)), 1 ether);
+
+        vm.stopPrank();
     }
 
+    function test_allowedMintSucceedsWithEnoughBalanceConsecutive() public {
+
+        // Prank as ALICE
+        vm.startPrank(ALICE);
+
+        // Attempt to mint 1 token
+        stronghold.mint(1, proof);
+        // Attempt to mint another token
+        stronghold.mint(1, proof);
+
+        // Assert ALICE has balance of 1
+        assertEq(stronghold.balanceOf(ALICE), 2);
+
+        // Assert that stronghold has INITIAL_INITIAL_LAUNCH_PRICE * 2 tokens
+        assertEq(quoteToken.balanceOf(address(stronghold)), 2 ether);
+
+        vm.stopPrank();
+    }
+
+    function test_allowedMintFailsWithNotEnoughBalance() public {
+    
+        // Prank as ALICE
+        vm.startPrank(ALICE);
+
+        // Send all tokens out
+        quoteToken.transfer(address(1), quoteToken.balanceOf(ALICE));
+
+        // Attempt to mint 1 token, should revert
+        vm.expectRevert();
+        stronghold.mint(1, proof);
+
+        vm.stopPrank();
+    }
+
+    // An address not on the list cannot mint 
     function test_disallowedMintFails() public {
-        
+
+        // Prank as CAROL
+        vm.startPrank(CAROL);
+
+        vm.expectRevert(Stronghold.NotOnList.selector);
+
+        // Attempt to mint 1 token
+        stronghold.mint(1, proof);
+
+        vm.stopPrank();
     }
 
-    function test_extraAllocForAllowedSucceeds() public {
-        
+    function test_createPoolsSucceedAfterInitialMint() public {
+
+        // Mint out all INITIAL_LAUNCH_SUPPLY NFTs
+        vm.startPrank(ALICE);
+
+        // Mint them all
+        stronghold.mint(10, proof);
+
+        // Create all 3 pools   
+        stronghold.initFloorPool();
+        stronghold.initAnchorPool();
+        stronghold.initTradePool();
+
+        // Check that trying to recreate them also fails
+    }
+
+    function test_createPoolsFailBeforeInitialMintComplete() public {
+
+        // Attempt to create all 3 pools
     }
 
 }
