@@ -8,6 +8,7 @@
 pragma solidity ^0.8.0;
 
 import {LSSVMPair} from "lssvm2/LSSVMPair.sol";
+import {LSSVMPairFactory} from "lssvm2/LSSVMPairFactory.sol";
 import {ICurve} from "lssvm2/bonding-curves/ICurve.sol";
 import {IPairHooks} from "lssvm2/hooks/IPairHooks.sol";
 
@@ -268,7 +269,9 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
             spotPrice: FLOOR_SPOT_PRICE,
             propertyChecker: address(0),
             initialNFTIDs: empty,
-            initialTokenBalance: FLOOR_INITIAL_TOKEN_BALANCE
+            initialTokenBalance: FLOOR_INITIAL_TOKEN_BALANCE,
+            hookAddress: address(this),
+            referralAddress: address(0)
         })));
 
         // Zero out token approval
@@ -297,7 +300,9 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
             spotPrice: ANCHOR_SPOT_PRICE,
             propertyChecker: address(0),
             initialNFTIDs: empty,
-            initialTokenBalance: 0
+            initialTokenBalance: 0,
+            hookAddress: address(this),
+            referralAddress: address(0)
         })));
 
         // Mint to anchor pool
@@ -330,7 +335,9 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks {
             spotPrice: TRADE_SPOT_PRICE,
             propertyChecker: address(0),
             initialNFTIDs: empty,
-            initialTokenBalance: 0
+            initialTokenBalance: 0,
+            hookAddress: address(this),
+            referralAddress: address(0)
         })));
 
         // Mint to trade pool

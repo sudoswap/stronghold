@@ -21,6 +21,8 @@ interface PairFactoryLike {
         address propertyChecker;
         uint256[] initialNFTIDs;
         uint256 initialTokenBalance;
+        address hookAddress;
+        address referralAddress;
     }
 
     function createPairERC721ERC20(CreateERC721ERC20PairParams calldata params) external returns (LSSVMPair pair);
