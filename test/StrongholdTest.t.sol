@@ -28,8 +28,9 @@ import {ERC20} from "solmate/tokens/ERC20.sol";
 import {Test20} from "./Test20.sol";
 
 import {Stronghold} from "../src/Stronghold.sol";
+import {IConstants} from "../src/IConstants.sol";
 
-contract StrongholdTest is Test {
+contract StrongholdTest is Test, IConstants {
 
     LSSVMPairFactory pairFactory;
     LinearCurve linearCurve;
@@ -149,8 +150,8 @@ contract StrongholdTest is Test {
         // Assert ALICE has balance of 1
         assertEq(stronghold.balanceOf(ALICE), 1);
 
-        // Assert that stronghold has INITIAL_INITIAL_LAUNCH_PRICE tokens
-        assertEq(quoteToken.balanceOf(address(stronghold)), 1 ether);
+        // Assert that stronghold has INITIAL_LAUNCH_PRICE tokens
+        assertEq(quoteToken.balanceOf(address(stronghold)), INITIAL_LAUNCH_PRICE);
 
         vm.stopPrank();
     }
@@ -168,8 +169,8 @@ contract StrongholdTest is Test {
         // Assert ALICE has balance of 1
         assertEq(stronghold.balanceOf(ALICE), 2);
 
-        // Assert that stronghold has INITIAL_INITIAL_LAUNCH_PRICE * 2 tokens
-        assertEq(quoteToken.balanceOf(address(stronghold)), 2 ether);
+        // Assert that stronghold has INITIAL_LAUNCH_PRICE * 2 tokens
+        assertEq(quoteToken.balanceOf(address(stronghold)), INITIAL_LAUNCH_PRICE * 2);
 
         vm.stopPrank();
     }
