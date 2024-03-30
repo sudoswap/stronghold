@@ -116,7 +116,7 @@ contract StrongholdTest is Test, IConstants {
         - disallowed user cannot mint [x]
 
         pools
-        - can deploy pools after minting out (is this a prereq?)
+        - can deploy pools after minting out (is this a prereq?) [x]
 
         swapping
         - can buy linear
@@ -204,25 +204,60 @@ contract StrongholdTest is Test, IConstants {
         vm.stopPrank();
     }
 
-    function test_createPoolsSucceedAfterInitialMint() public {
+    function test_disallowedMintSucceedsIfRootIsZero() public {
+        Stronghold zeroStronghold = new Stronghold(
+            linearCurve,
+            xykCurve,
+            address(quoteToken),
+            address(pairFactory),
+            bytes32(0)
+        );
+        vm.startPrank(CAROL);
+        quoteToken.approve(address(zeroStronghold), LARGE_TOKEN_AMOUNT);
+        zeroStronghold.mint(1, proof);
+        vm.stopPrank();
+    }
 
-        // Mint out all INITIAL_LAUNCH_SUPPLY NFTs
+    function _finishMintAndInitPools() internal {
         vm.startPrank(ALICE);
-
-        // Mint them all
-        stronghold.mint(10, proof);
-
-        // Create all 3 pools   
+        stronghold.mint(IConstants.INITIAL_LAUNCH_SUPPLY, proof); 
         stronghold.initFloorPool();
         stronghold.initAnchorPool();
         stronghold.initTradePool();
+        vm.stopPrank();
+    }
+
+    function test_createPoolsSucceedAfterInitialMint() public {
+
+        _finishMintAndInitPools();
 
         // Check that trying to recreate them also fails
+        vm.expectRevert(Stronghold.PoolAlreadyExists.selector);
+        stronghold.initFloorPool();
+
+        vm.expectRevert(Stronghold.PoolAlreadyExists.selector);
+        stronghold.initAnchorPool();
+
+        vm.expectRevert(Stronghold.PoolAlreadyExists.selector);
+        stronghold.initTradePool();
     }
 
     function test_createPoolsFailBeforeInitialMintComplete() public {
 
-        // Attempt to create all 3 pools
-    }
+        // Mint out all INITIAL_LAUNCH_SUPPLY-1 NFTs
+        vm.startPrank(ALICE);
 
+        // Mint them all
+        stronghold.mint(IConstants.INITIAL_LAUNCH_SUPPLY-1, proof);
+
+        // Attempt to create all 3 pools
+        vm.expectRevert(Stronghold.InitialMintIncomplete.selector);
+        stronghold.initFloorPool();
+
+        vm.expectRevert(Stronghold.InitialMintIncomplete.selector);
+        stronghold.initAnchorPool();
+
+        vm.expectRevert(Stronghold.InitialMintIncomplete.selector);
+        stronghold.initTradePool();
+    }
 }
