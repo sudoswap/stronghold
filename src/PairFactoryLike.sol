@@ -26,4 +26,18 @@ interface PairFactoryLike {
     }
 
     function createPairERC721ERC20(CreateERC721ERC20PairParams calldata params) external returns (LSSVMPair pair);
+
+    function createPairERC721ETH(
+        IERC721 _nft,
+        ICurve _bondingCurve,
+        address payable _assetRecipient,
+        LSSVMPair.PoolType _poolType,
+        uint128 _delta,
+        uint96 _fee,
+        uint128 _spotPrice,
+        address _propertyChecker,
+        uint256[] calldata _initialNFTIDs,
+        address _hookAddress,
+        address _referralAddress
+    ) external returns (LSSVMPair pair);
 }

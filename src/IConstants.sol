@@ -37,7 +37,7 @@ abstract contract IConstants {
     // Loan configs
     uint256 constant LOAN_NUM = 95; // 95% ltv relative to floor
     uint256 constant LOAN_DENOM = 100;
-    uint256 constant MAX_LOAN_DURATION = 84 days;
+    uint256 constant MAX_LOAN_DURATION = 90 days;
     uint256 constant INTEREST_NUM = 2; // Approx 0.02% a day in interest
     uint256 constant INTEREST_DENOM = 864000000; 
     uint256 constant LOAN_GRACE_PERIOD = 1 days;

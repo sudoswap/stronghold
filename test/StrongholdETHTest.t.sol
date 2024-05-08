@@ -23,11 +23,9 @@ import {LinearCurve} from "lib/lssvm2/src/bonding-curves/LinearCurve.sol";
 import {XykCurve} from "lib/lssvm2/src/bonding-curves/XykCurve.sol";
 import {ICurve} from "lib/lssvm2/src/bonding-curves/ICurve.sol";
 
-import {ERC20} from "solmate/tokens/ERC20.sol";
-
 import {Test20} from "./Test20.sol";
 
-import {Stronghold} from "../src/Stronghold.sol";
+import {StrongholdETH} from "../src/StrongholdETH.sol";
 import {IConstants} from "../src/IConstants.sol";
 
 contract StrongholdTest is Test, IConstants {
@@ -35,8 +33,7 @@ contract StrongholdTest is Test, IConstants {
     LSSVMPairFactory pairFactory;
     LinearCurve linearCurve;
     XykCurve xykCurve;
-    Test20 quoteToken;
-    Stronghold stronghold;
+    StrongholdETH stronghold;
 
     address constant ALICE = address(123);
     address constant BOB = address(456);
@@ -67,9 +64,6 @@ contract StrongholdTest is Test, IConstants {
         pairFactory.setBondingCurveAllowed(ICurve(address(linearCurve)), true);
         pairFactory.setBondingCurveAllowed(ICurve(address(xykCurve)), true);
 
-        // Initialize quote token
-        quoteToken = new Test20();
-
         // Init allow list
         // Create merkle tree
         address[2] memory allowedUsers = [ALICE, BOB];
@@ -83,40 +77,29 @@ contract StrongholdTest is Test, IConstants {
         proof[0] = hashes[1];
 
         // Init stronghold
-        stronghold = new Stronghold(
+        stronghold = new StrongholdETH(
             linearCurve,
             xykCurve,
-            address(quoteToken),
             address(pairFactory),
             hashes[2]
         );
 
-        // Mint enough tokens to ALICE, BOB, CAROL
-        // Approve Stronghold for each
-        quoteToken.mint(ALICE, LARGE_TOKEN_AMOUNT);
-        quoteToken.mint(BOB, LARGE_TOKEN_AMOUNT);        
-        quoteToken.mint(CAROL, LARGE_TOKEN_AMOUNT);
-
-        vm.startPrank(ALICE);
-        quoteToken.approve(address(stronghold), LARGE_TOKEN_AMOUNT);
-        vm.stopPrank();        
-        
-        vm.startPrank(BOB);
-        quoteToken.approve(address(stronghold), LARGE_TOKEN_AMOUNT);
-        vm.stopPrank();
-
-        vm.startPrank(CAROL);
-        quoteToken.approve(address(stronghold), LARGE_TOKEN_AMOUNT);
-        vm.stopPrank();
+        // Mint enough ETH to ALICE, BOB, CAROL
+        vm.deal(ALICE, LARGE_TOKEN_AMOUNT);
+        vm.deal(BOB, LARGE_TOKEN_AMOUNT);        
+        vm.deal(CAROL, LARGE_TOKEN_AMOUNT);
     }
 
     /**
         minting
         - allowed user can mint [x]
         - disallowed user cannot mint [x]
+        - cannot call distribute fees before pools are deployed
 
         pools
         - can deploy pools after minting out (is this a prereq?) [x]
+        - pools have the right delta/spot price
+        - pools have the right bonding curve
 
         swapping
         - can buy linear
@@ -139,20 +122,19 @@ contract StrongholdTest is Test, IConstants {
         - another user cannot liquidate loan if late
      */
 
-    /*
     function test_allowedMintSucceedsWithEnoughBalance() public {
 
         // Prank as ALICE
         vm.startPrank(ALICE);
 
         // Attempt to mint 1 token
-        stronghold.mint(1, proof);
+        stronghold.mint{value: INITIAL_LAUNCH_PRICE}(1, proof);
 
         // Assert ALICE has balance of 1
         assertEq(stronghold.balanceOf(ALICE), 1);
 
         // Assert that stronghold has INITIAL_LAUNCH_PRICE tokens
-        assertEq(quoteToken.balanceOf(address(stronghold)), INITIAL_LAUNCH_PRICE);
+        assertEq(address(stronghold).balance, INITIAL_LAUNCH_PRICE);
 
         vm.stopPrank();
     }
@@ -163,30 +145,27 @@ contract StrongholdTest is Test, IConstants {
         vm.startPrank(ALICE);
 
         // Attempt to mint 1 token
-        stronghold.mint(1, proof);
+        stronghold.mint{value: INITIAL_LAUNCH_PRICE}(1, proof);
         // Attempt to mint another token
-        stronghold.mint(1, proof);
+        stronghold.mint{value: INITIAL_LAUNCH_PRICE}(1, proof);
 
         // Assert ALICE has balance of 1
         assertEq(stronghold.balanceOf(ALICE), 2);
 
         // Assert that stronghold has INITIAL_LAUNCH_PRICE * 2 tokens
-        assertEq(quoteToken.balanceOf(address(stronghold)), INITIAL_LAUNCH_PRICE * 2);
+        assertEq(address(stronghold).balance, INITIAL_LAUNCH_PRICE * 2);
 
         vm.stopPrank();
     }
 
-    function test_allowedMintFailsWithNotEnoughBalance() public {
-    
+     function test_allowedMintFailsIfInsufficientFundsSent() public {
+
         // Prank as ALICE
         vm.startPrank(ALICE);
 
-        // Send all tokens out
-        quoteToken.transfer(address(1), quoteToken.balanceOf(ALICE));
-
-        // Attempt to mint 1 token, should revert
-        vm.expectRevert();
-        stronghold.mint(1, proof);
+        // Attempt to mint 1 token
+        vm.expectRevert(StrongholdETH.TokenNotPaid.selector);
+        stronghold.mint{value: INITIAL_LAUNCH_PRICE - 1}(1, proof);
 
         vm.stopPrank();
     }
@@ -197,31 +176,34 @@ contract StrongholdTest is Test, IConstants {
         // Prank as CAROL
         vm.startPrank(CAROL);
 
-        vm.expectRevert(Stronghold.NotOnList.selector);
+        vm.expectRevert(StrongholdETH.NotOnList.selector);
 
         // Attempt to mint 1 token
-        stronghold.mint(1, proof);
+        stronghold.mint{value: INITIAL_LAUNCH_PRICE}(1, proof);
 
         vm.stopPrank();
     }
 
     function test_disallowedMintSucceedsIfRootIsZero() public {
-        Stronghold zeroStronghold = new Stronghold(
+        StrongholdETH zeroStronghold = new StrongholdETH(
             linearCurve,
             xykCurve,
-            address(quoteToken),
             address(pairFactory),
             bytes32(0)
         );
         vm.startPrank(CAROL);
-        quoteToken.approve(address(zeroStronghold), LARGE_TOKEN_AMOUNT);
-        zeroStronghold.mint(1, proof);
+        zeroStronghold.mint{value: INITIAL_LAUNCH_PRICE}(1, proof);
         vm.stopPrank();
+    }
+
+    function test_distributeFeesFailsIfPoolsNotAllDeployed() public {
+        vm.expectRevert();
+        stronghold.distributeFees(0);
     }
 
     function _finishMintAndInitPools() internal {
         vm.startPrank(ALICE);
-        stronghold.mint(IConstants.INITIAL_LAUNCH_SUPPLY, proof); 
+        stronghold.mint{value: INITIAL_LAUNCH_SUPPLY * INITIAL_LAUNCH_PRICE}(INITIAL_LAUNCH_SUPPLY, proof); 
         stronghold.initFloorPool();
         stronghold.initAnchorPool();
         stronghold.initTradePool();
@@ -233,14 +215,31 @@ contract StrongholdTest is Test, IConstants {
         _finishMintAndInitPools();
 
         // Check that trying to recreate them also fails
-        vm.expectRevert(Stronghold.PoolAlreadyExists.selector);
+        vm.expectRevert(StrongholdETH.PoolAlreadyExists.selector);
         stronghold.initFloorPool();
 
-        vm.expectRevert(Stronghold.PoolAlreadyExists.selector);
+        vm.expectRevert(StrongholdETH.PoolAlreadyExists.selector);
         stronghold.initAnchorPool();
 
-        vm.expectRevert(Stronghold.PoolAlreadyExists.selector);
+        vm.expectRevert(StrongholdETH.PoolAlreadyExists.selector);
         stronghold.initTradePool();
+
+        // Assert that floor and anchor use linear curve
+        assertEq(address(LSSVMPair(stronghold.floorPool()).bondingCurve()), address(linearCurve));
+        assertEq(address(LSSVMPair(stronghold.anchorPool()).bondingCurve()), address(linearCurve));
+
+        // Assert that trade pool uses xyk curve
+        assertEq(address(LSSVMPair(stronghold.tradePool()).bondingCurve()), address(xykCurve));
+
+        // Assert that the spot price and deltas are as expected
+        assertEq(LSSVMPair(stronghold.floorPool()).spotPrice(), FLOOR_SPOT_PRICE);
+        assertEq(LSSVMPair(stronghold.floorPool()).delta(), 0);
+
+        assertEq(LSSVMPair(stronghold.anchorPool()).spotPrice(), ANCHOR_SPOT_PRICE);
+        assertEq(LSSVMPair(stronghold.anchorPool()).delta(), ANCHOR_DELTA);
+
+        assertEq(LSSVMPair(stronghold.tradePool()).spotPrice(), TRADE_SPOT_PRICE);
+        assertEq(LSSVMPair(stronghold.tradePool()).delta(), TRADE_DELTA);
     }
 
     function test_createPoolsFailBeforeInitialMintComplete() public {
@@ -249,17 +248,16 @@ contract StrongholdTest is Test, IConstants {
         vm.startPrank(ALICE);
 
         // Mint them all
-        stronghold.mint(IConstants.INITIAL_LAUNCH_SUPPLY-1, proof);
+        stronghold.mint{value: (INITIAL_LAUNCH_SUPPLY-1) * INITIAL_LAUNCH_PRICE}(INITIAL_LAUNCH_SUPPLY-1, proof);
 
         // Attempt to create all 3 pools
-        vm.expectRevert(Stronghold.InitialMintIncomplete.selector);
+        vm.expectRevert(StrongholdETH.InitialMintIncomplete.selector);
         stronghold.initFloorPool();
 
-        vm.expectRevert(Stronghold.InitialMintIncomplete.selector);
+        vm.expectRevert(StrongholdETH.InitialMintIncomplete.selector);
         stronghold.initAnchorPool();
 
-        vm.expectRevert(Stronghold.InitialMintIncomplete.selector);
+        vm.expectRevert(StrongholdETH.InitialMintIncomplete.selector);
         stronghold.initTradePool();
     }
-    */
 }

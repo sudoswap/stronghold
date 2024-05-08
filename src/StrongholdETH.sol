@@ -8,6 +8,7 @@
 pragma solidity ^0.8.0;
 
 import {LSSVMPair} from "lssvm2/LSSVMPair.sol";
+import {LSSVMPairETH} from "lssvm2/LSSVMPairETH.sol";
 import {LSSVMPairFactory} from "lssvm2/LSSVMPairFactory.sol";
 import {ICurve} from "lssvm2/bonding-curves/ICurve.sol";
 import {IPairHooks} from "lssvm2/hooks/IPairHooks.sol";
@@ -15,16 +16,18 @@ import {IPairHooks} from "lssvm2/hooks/IPairHooks.sol";
 import {ERC2981} from "openzeppelin-contracts/contracts/token/common/ERC2981.sol";
 import {IERC2981} from "openzeppelin-contracts/contracts/interfaces/IERC2981.sol";
 import {IERC721} from "openzeppelin-contracts/contracts/token/ERC721/IERC721.sol";
-import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
-import {ERC20} from "solmate/tokens/ERC20.sol";
+import {SafeTransferLib} from "solmate/utils/SafeTransferLib.sol";
+import {ReentrancyGuard} from "solmate/utils/ReentrancyGuard.sol";
 
 import {ERC721Minimal} from "./ERC721Minimal.sol";
 import {PairFactoryLike} from "./PairFactoryLike.sol";
 import {IConstants} from "./IConstants.sol";
 
-contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
+contract StrongholdETH is ERC721Minimal, ERC2981, IPairHooks, IConstants, ReentrancyGuard {
+
+    using SafeTransferLib for address payable;
 
     /*//////////////////////////////////////////////////////////////
                   Structs
@@ -48,6 +51,7 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
     
     error NotOnList();
     error TooMany();
+    error TokenNotPaid();
     error Cooldown();
     error PoolAlreadyExists();
     error InitialMintIncomplete();
@@ -74,7 +78,6 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
     // Sudo immutable configs
     ICurve immutable LINEAR_CURVE;
     ICurve immutable XYK_CURVE;
-    address immutable QUOTE_TOKEN;
     address immutable SUDO_FACTORY;
 
     /*//////////////////////////////////////////////////////////////
@@ -97,13 +100,11 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
     constructor(
         ICurve _LINEAR_CURVE,
         ICurve _XYK_CURVE,
-        address _QUOTE_TOKEN,
         address _SUDO_FACTORY,
         bytes32 _MERKLE_ROOT
     ) ERC721Minimal("Stronghold", "HODL") {
         LINEAR_CURVE = _LINEAR_CURVE;
         XYK_CURVE = _XYK_CURVE;
-        QUOTE_TOKEN = _QUOTE_TOKEN;
         SUDO_FACTORY = _SUDO_FACTORY;
         MERKLE_ROOT = _MERKLE_ROOT;
         _setDefaultRoyalty(address(this), ROYALTY_BPS);
@@ -147,7 +148,7 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
         // Send to floor pool, and update price
         {
             uint256 floorDeposit = royaltyAmount / FLOOR_DENOM;
-            IERC20(QUOTE_TOKEN).transfer(floorPool, floorDeposit);
+            payable(floorPool).safeTransferETH(floorDeposit);
             uint128 newSpotPrice = uint128(LSSVMPair(floorPool).spotPrice() + floorDeposit / TOTAL_SUPPLY);
             LSSVMPair(floorPool).changeSpotPrice(newSpotPrice);
         }
@@ -155,13 +156,13 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
         // Send to anchor pool, no price update
         {
             uint256 anchorDeposit = royaltyAmount / ANCHOR_DENOM;
-            IERC20(QUOTE_TOKEN).transfer(anchorPool, anchorDeposit);
+            payable(anchorPool).safeTransferETH(anchorDeposit);
         }
 
         // Send to trade pool, update price
         {
             uint256 tradeDeposit = royaltyAmount / TRADE_DENOM;
-            IERC20(QUOTE_TOKEN).transfer(tradePool, tradeDeposit);
+            payable(tradePool).safeTransferETH(tradeDeposit);
             uint128 newSpotPrice = uint128(LSSVMPair(tradePool).spotPrice() + tradeDeposit);
             LSSVMPair(tradePool).changeSpotPrice(newSpotPrice);
         }
@@ -186,7 +187,7 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
         }
     }
 
-    function mint(uint256 amountToMint, bytes32[] calldata proof) external {
+    function mint(uint256 amountToMint, bytes32[] calldata proof) payable external {
         
         // Verify caller is allowed if nonzero merkle root
         if (MERKLE_ROOT != bytes32(0)) {
@@ -201,7 +202,9 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
 
         // Take in input tokens
         uint256 mintPrice = INITIAL_LAUNCH_PRICE * amountToMint;
-        IERC20(QUOTE_TOKEN).transferFrom(msg.sender, address(this), mintPrice);
+        if (msg.value != mintPrice) {
+            revert TokenNotPaid();
+        }
 
         // Mint to caller
         uint256 prevTotalSupply = totalSupply;
@@ -220,31 +223,20 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
         if (totalSupply < INITIAL_LAUNCH_SUPPLY) {
             revert InitialMintIncomplete();
         }
-
         uint256[] memory empty = new uint256[](0);
-
-        // Approve factory
-        IERC20(QUOTE_TOKEN).approve(SUDO_FACTORY, FLOOR_INITIAL_TOKEN_BALANCE);
-
-        // Create pool
-        floorPool = address(PairFactoryLike(SUDO_FACTORY).createPairERC721ERC20(PairFactoryLike.CreateERC721ERC20PairParams({
-            token: ERC20(QUOTE_TOKEN),
-            nft: IERC721(address(this)),
-            bondingCurve: LINEAR_CURVE,
-            assetRecipient: payable(address(0)),
-            poolType: LSSVMPair.PoolType.TRADE,
-            delta: 0,
-            fee: 0,
-            spotPrice: FLOOR_SPOT_PRICE,
-            propertyChecker: address(0),
-            initialNFTIDs: empty,
-            initialTokenBalance: FLOOR_INITIAL_TOKEN_BALANCE,
-            hookAddress: address(this),
-            referralAddress: address(0)
-        })));
-
-        // Zero out token approval
-        IERC20(QUOTE_TOKEN).approve(SUDO_FACTORY, 0);
+        floorPool = address(PairFactoryLike(SUDO_FACTORY).createPairERC721ETH(
+            IERC721(address(this)), 
+            LINEAR_CURVE, 
+            payable(address(0)), 
+            LSSVMPair.PoolType.TRADE, 
+            0, 
+            0, 
+            FLOOR_SPOT_PRICE, 
+            address(0), 
+            empty, 
+            address(this), 
+            address(0)
+        ));
     }
 
     // Create linear pool that gets adjusted
@@ -258,21 +250,19 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
         }
 
         uint256[] memory empty = new uint256[](0);
-        anchorPool = address(PairFactoryLike(SUDO_FACTORY).createPairERC721ERC20(PairFactoryLike.CreateERC721ERC20PairParams({
-            token: ERC20(QUOTE_TOKEN),
-            nft: IERC721(address(this)),
-            bondingCurve: LINEAR_CURVE,
-            assetRecipient: payable(address(0)),
-            poolType: LSSVMPair.PoolType.TRADE,
-            delta: ANCHOR_DELTA,
-            fee: 0,
-            spotPrice: ANCHOR_SPOT_PRICE,
-            propertyChecker: address(0),
-            initialNFTIDs: empty,
-            initialTokenBalance: 0,
-            hookAddress: address(this),
-            referralAddress: address(0)
-        })));
+        anchorPool = address(PairFactoryLike(SUDO_FACTORY).createPairERC721ETH(
+            IERC721(address(this)), 
+            LINEAR_CURVE, 
+            payable(address(0)), 
+            LSSVMPair.PoolType.TRADE, 
+            ANCHOR_DELTA, 
+            0, 
+            ANCHOR_SPOT_PRICE, 
+            address(0), 
+            empty, 
+            address(this), 
+            address(0)
+        ));
 
         // Mint to anchor pool
         _mint(anchorPool, INITIAL_LAUNCH_SUPPLY + 1, INITIAL_LAUNCH_SUPPLY + ANCHOR_INITIAL_SUPPLY);
@@ -293,21 +283,19 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
         }
 
         uint256[] memory empty = new uint256[](0);
-        tradePool = address(PairFactoryLike(SUDO_FACTORY).createPairERC721ERC20(PairFactoryLike.CreateERC721ERC20PairParams({
-            token: ERC20(QUOTE_TOKEN),
-            nft: IERC721(address(this)),
-            bondingCurve: XYK_CURVE,
-            assetRecipient: payable(address(0)),
-            poolType: LSSVMPair.PoolType.TRADE,
-            delta: TRADE_DELTA,
-            fee: 0,
-            spotPrice: TRADE_SPOT_PRICE,
-            propertyChecker: address(0),
-            initialNFTIDs: empty,
-            initialTokenBalance: 0,
-            hookAddress: address(this),
-            referralAddress: address(0)
-        })));
+        tradePool = address(PairFactoryLike(SUDO_FACTORY).createPairERC721ETH(
+            IERC721(address(this)), 
+            XYK_CURVE, 
+            payable(address(0)), 
+            LSSVMPair.PoolType.TRADE, 
+            TRADE_DELTA, 
+            0, 
+            TRADE_SPOT_PRICE, 
+            address(0), 
+            empty, 
+            address(this), 
+            address(0)
+        ));
 
         // Mint to trade pool
         _mint(anchorPool, INITIAL_LAUNCH_SUPPLY + ANCHOR_INITIAL_SUPPLY + 1, INITIAL_LAUNCH_SUPPLY + ANCHOR_INITIAL_SUPPLY + TRADE_INITIAL_SUPPLY);
@@ -322,7 +310,7 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
                       Borrow x Margin
     //////////////////////////////////////////////////////////////*/
 
-    function borrow(uint256[] calldata idsToDeposit, uint256 loanDurationInSeconds, address loanOwner) external returns (uint256 loanAmount) {
+    function borrow(uint256[] calldata idsToDeposit, uint256 loanDurationInSeconds, address loanOwner) payable external nonReentrant returns (uint256 loanAmount) {
         
         // Check if loan duration is too long
         if (loanDurationInSeconds > MAX_LOAN_DURATION) {
@@ -340,8 +328,8 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
         uint256 interestAmount = getInterestOwed(loanAmount, loanDurationInSeconds);
 
         // Withdraw and send the loan (minus interest) to the caller
-        LSSVMPair(floorPool).withdrawERC20(ERC20(QUOTE_TOKEN), loanAmount);
-        ERC20(QUOTE_TOKEN).transfer(msg.sender, loanAmount);
+        LSSVMPairETH(payable(floorPool)).withdrawETH(loanAmount);
+        payable(msg.sender).safeTransferETH(loanAmount);
 
         // Store the loan data
         loanForUser[loanOwner] = Loan({
@@ -355,7 +343,7 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
     }
 
     // Allows a user to repay their own loan
-    function repay() external {
+    function repay() payable external {
         _repayLoanForUser(msg.sender, msg.sender);
     }
 
@@ -379,10 +367,12 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
         uint256 amountToRepay = userLoan.interestOwed + userLoan.principalOwed;
 
         // Take repayment from loanCloser
-        ERC20(QUOTE_TOKEN).transferFrom(loanCloser, address(this), amountToRepay);
+        if (msg.value < amountToRepay) {
+            revert TokenNotPaid();
+        }
 
         // Send original amount back to the floor pool
-        ERC20(QUOTE_TOKEN).transfer(floorPool, userLoan.principalOwed);
+        payable(floorPool).safeTransferETH(userLoan.principalOwed);
 
         // Interest owed is used as fees to redistribute
         distributeFees(userLoan.interestOwed);
@@ -398,7 +388,6 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
         emit LoanClosure(userLoan.idsDeposited, userLoan.principalOwed, userLoan.interestOwed, loanCloser);
     }
 
-    // 
     function getLoanAmount(uint256 numNFTsToDeposit) public view returns (uint256 loanAmount) {
         loanAmount = (LSSVMPair(floorPool).spotPrice() * numNFTsToDeposit * LOAN_NUM) / LOAN_DENOM;
     }
