@@ -39,5 +39,5 @@ interface PairFactoryLike {
         uint256[] calldata _initialNFTIDs,
         address _hookAddress,
         address _referralAddress
-    ) external returns (LSSVMPair pair);
+    ) external payable returns (LSSVMPair pair);
 }

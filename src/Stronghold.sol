@@ -24,6 +24,10 @@ import {ERC721Minimal} from "./ERC721Minimal.sol";
 import {PairFactoryLike} from "./PairFactoryLike.sol";
 import {IConstants} from "./IConstants.sol";
 
+/**
+    NOTE: THIS CODE SHOULD BE TREATED AS BUG-RIDDEN, ONLY STRONGHOLD_ETH HAS BEEN RIGOROUSLY TESTED
+ */
+
 contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
 
     /*//////////////////////////////////////////////////////////////
@@ -412,7 +416,7 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
     //////////////////////////////////////////////////////////////*/
 
     // TODO
-    function tokenURI(uint256 id) public view override returns (string memory) {
+    function tokenURI(uint256) public pure override returns (string memory) {
         return '';
     }
 

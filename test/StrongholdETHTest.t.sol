@@ -38,6 +38,7 @@ contract StrongholdTest is Test, IConstants {
     address constant ALICE = address(123);
     address constant BOB = address(456);
     address constant CAROL = address(789);
+    address constant DAVE = address(101112);
 
     uint256 constant LARGE_TOKEN_AMOUNT = 1000000 ether;
     bytes32[] proof;
@@ -98,8 +99,8 @@ contract StrongholdTest is Test, IConstants {
 
         pools
         - can deploy pools after minting out (is this a prereq?) [x]
-        - pools have the right delta/spot price
-        - pools have the right bonding curve
+        - pools have the right delta/spot price [x]
+        - pools have the right bonding curve [x]
 
         swapping
         - can buy linear
@@ -109,17 +110,6 @@ contract StrongholdTest is Test, IConstants {
 
         rebalancing
         - check more specific rebalancing logic
-
-        borrowing
-        - user can borrow
-        - user cannot borrow more
-        - user cannot borrow ids they do not have
-        - user can swap and borrow
-        - user cannot swap and borrow if it leaves the flash loaner insolvent
-        - user can repay loan if late
-        - user can repay loan if early
-        - another user can liquidate loan if late
-        - another user cannot liquidate loan if late
      */
 
     function test_allowedMintSucceedsWithEnoughBalance() public {
@@ -171,7 +161,7 @@ contract StrongholdTest is Test, IConstants {
     }
 
     // An address not on the list cannot mint 
-    function test_disallowedMintFails() public {
+    function test_mintFailsIfNotOnListBeforeDeadline() public {
 
         // Prank as CAROL
         vm.startPrank(CAROL);
@@ -259,5 +249,40 @@ contract StrongholdTest is Test, IConstants {
 
         vm.expectRevert(StrongholdETH.InitialMintIncomplete.selector);
         stronghold.initTradePool();
+    }
+
+    /**
+    
+            borrowing
+        - user can borrow [ ]
+        - user borrow fails if loan duration is too long [ ]
+        - user cannot borrow more than 1 at a time [ ]
+        - user cannot borrow ids they do not have [ ]
+        
+        - user can swap and borrow [ ]
+        - user cannot swap and borrow if it leaves the flash loaner insolvent [ ]
+        - user can repay loan if late [ ]
+        - user can repay loan if early [ ]
+        - interest is collected / computed correctly [ ]
+
+        - another user can liquidate loan if late [ ]
+        - another user cannot liquidate loan if late [ ]
+    */
+
+    event Foo(uint256 a);
+
+    function test_borrowSucceedsForUser() public {
+
+        _finishMintAndInitPools();
+
+        // Mint out all NFTs
+        vm.startPrank(ALICE);
+
+        // Take a out loan for DAVE
+        stronghold.setApprovalForAll(address(stronghold), true);
+        uint256[] memory id = new uint256[](1);
+        stronghold.borrow(id, 1, DAVE);
+
+        assertEq(address(DAVE).balance, stronghold.getLoanAmount(1));
     }
 }

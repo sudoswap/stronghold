@@ -79,6 +79,7 @@ contract StrongholdETH is ERC721Minimal, ERC2981, IPairHooks, IConstants, Reentr
     ICurve immutable LINEAR_CURVE;
     ICurve immutable XYK_CURVE;
     address immutable SUDO_FACTORY;
+    uint256 immutable START_TIME;
 
     /*//////////////////////////////////////////////////////////////
                        State
@@ -107,6 +108,7 @@ contract StrongholdETH is ERC721Minimal, ERC2981, IPairHooks, IConstants, Reentr
         XYK_CURVE = _XYK_CURVE;
         SUDO_FACTORY = _SUDO_FACTORY;
         MERKLE_ROOT = _MERKLE_ROOT;
+        START_TIME = block.timestamp;
         _setDefaultRoyalty(address(this), ROYALTY_BPS);
     }
 
@@ -190,7 +192,7 @@ contract StrongholdETH is ERC721Minimal, ERC2981, IPairHooks, IConstants, Reentr
     function mint(uint256 amountToMint, bytes32[] calldata proof) payable external {
         
         // Verify caller is allowed if nonzero merkle root
-        if (MERKLE_ROOT != bytes32(0)) {
+        if ((MERKLE_ROOT != bytes32(0)) && (block.timestamp < START_TIME + DELAY_BEFORE_PUBLIC_MINT)) {
             if (!MerkleProof.verify(proof, MERKLE_ROOT, keccak256(abi.encodePacked(msg.sender)))) {
             revert NotOnList();
             }
@@ -224,7 +226,7 @@ contract StrongholdETH is ERC721Minimal, ERC2981, IPairHooks, IConstants, Reentr
             revert InitialMintIncomplete();
         }
         uint256[] memory empty = new uint256[](0);
-        floorPool = address(PairFactoryLike(SUDO_FACTORY).createPairERC721ETH(
+        floorPool = address(PairFactoryLike(SUDO_FACTORY).createPairERC721ETH{value: FLOOR_INITIAL_TOKEN_BALANCE}(
             IERC721(address(this)), 
             LINEAR_CURVE, 
             payable(address(0)), 
@@ -310,7 +312,7 @@ contract StrongholdETH is ERC721Minimal, ERC2981, IPairHooks, IConstants, Reentr
                       Borrow x Margin
     //////////////////////////////////////////////////////////////*/
 
-    function borrow(uint256[] calldata idsToDeposit, uint256 loanDurationInSeconds, address loanOwner) payable external nonReentrant returns (uint256 loanAmount) {
+    function borrow(uint256[] calldata idsToDeposit, uint256 loanDurationInSeconds, address loanOwner) external nonReentrant returns (uint256 loanAmount) {
         
         // Check if loan duration is too long
         if (loanDurationInSeconds > MAX_LOAN_DURATION) {
@@ -329,7 +331,7 @@ contract StrongholdETH is ERC721Minimal, ERC2981, IPairHooks, IConstants, Reentr
 
         // Withdraw and send the loan (minus interest) to the caller
         LSSVMPairETH(payable(floorPool)).withdrawETH(loanAmount);
-        payable(msg.sender).safeTransferETH(loanAmount);
+        payable(loanOwner).safeTransferETH(loanAmount);
 
         // Store the loan data
         loanForUser[loanOwner] = Loan({
@@ -401,7 +403,7 @@ contract StrongholdETH is ERC721Minimal, ERC2981, IPairHooks, IConstants, Reentr
     //////////////////////////////////////////////////////////////*/
 
     // TODO
-    function tokenURI(uint256 id) public view override returns (string memory) {
+    function tokenURI(uint256) public pure override returns (string memory) {
         return '';
     }
 
@@ -438,7 +440,7 @@ contract StrongholdETH is ERC721Minimal, ERC2981, IPairHooks, IConstants, Reentr
         delete getApproved[id];
         uint256 timestamp = block.timestamp;
 
-        // Always allow transfer if one of the recipients is a sudo pool
+        // Always allow transfer if one of the recipients is a sudo pool or if it's to the NFT itself
         bool isPairOrSelf;
         try PairFactoryLike(SUDO_FACTORY).isValidPair(from) returns (bool result) {
             isPairOrSelf = result;
@@ -469,6 +471,8 @@ contract StrongholdETH is ERC721Minimal, ERC2981, IPairHooks, IConstants, Reentr
         }
         emit Transfer(from, to, id);
     }
+
+    receive() external payable {}
 
     // Everything else is a no-op, just for hook compatibility
     function afterNewPair() external {}

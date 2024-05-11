@@ -7,6 +7,7 @@ abstract contract IConstants {
     // Launch configs
     uint256 constant INITIAL_LAUNCH_SUPPLY = 10;
     uint256 constant INITIAL_LAUNCH_PRICE = 1 ether;
+    uint256 constant DELAY_BEFORE_PUBLIC_MINT = 7 days;
 
     // General configs
     uint256 constant TRANSFER_DELAY = 7 days;
