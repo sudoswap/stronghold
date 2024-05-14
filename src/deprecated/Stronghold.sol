@@ -5,6 +5,9 @@
 /* solhint-disable func-param-name-mixedcase */
 /* solhint-disable no-unused-vars */
 
+
+/*
+
 pragma solidity ^0.8.0;
 
 import {LSSVMPair} from "lssvm2/LSSVMPair.sol";
@@ -24,15 +27,9 @@ import {ERC721Minimal} from "./ERC721Minimal.sol";
 import {PairFactoryLike} from "./PairFactoryLike.sol";
 import {IConstants} from "./IConstants.sol";
 
-/**
-    NOTE: THIS CODE SHOULD BE TREATED AS BUG-RIDDEN, ONLY STRONGHOLD_ETH HAS BEEN RIGOROUSLY TESTED
- */
-
 contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
 
-    /*//////////////////////////////////////////////////////////////
-                  Structs
-    //////////////////////////////////////////////////////////////*/
+
 
     struct OwnerOfWithData {
         address owner;
@@ -46,9 +43,6 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
         uint256 interestOwed;
     }
 
-    /*//////////////////////////////////////////////////////////////
-                       Errors
-    //////////////////////////////////////////////////////////////*/
     
     error NotOnList();
     error TooMany();
@@ -61,16 +55,9 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
     error LoanTooLong();
     error TooEarlyToSieze();
 
-    /*//////////////////////////////////////////////////////////////
-                       Events
-    //////////////////////////////////////////////////////////////*/
 
     event LoanOrigination(uint256[] ids, uint256 principalOwed, uint256 interestOwed, uint256 duration);
     event LoanClosure(uint256[] ids, uint256 principalOwed, uint256 interestOwed, address loanCloser);
-
-    /*//////////////////////////////////////////////////////////////
-                    Immutables
-    //////////////////////////////////////////////////////////////*/
 
     // For merkle root
     bytes32 immutable MERKLE_ROOT;
@@ -81,10 +68,6 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
     address immutable QUOTE_TOKEN;
     address immutable SUDO_FACTORY;
 
-    /*//////////////////////////////////////////////////////////////
-                       State
-    //////////////////////////////////////////////////////////////*/
-
     mapping(uint256 => OwnerOfWithData) public ownerOfWithData;
     mapping(address => Loan) public loanForUser;
 
@@ -93,10 +76,6 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
     address public anchorPool;
 
     uint256 public totalSupply;
-
-    /*//////////////////////////////////////////////////////////////
-                       Constructor
-    //////////////////////////////////////////////////////////////*/
 
     constructor(
         ICurve _LINEAR_CURVE,
@@ -112,10 +91,6 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
         MERKLE_ROOT = _MERKLE_ROOT;
         _setDefaultRoyalty(address(this), ROYALTY_BPS);
     }
-
-    /*//////////////////////////////////////////////////////////////
-                     Pair Hook x Rebalance Logic
-    //////////////////////////////////////////////////////////////*/
 
     function afterSwapNFTInPair(
         uint256 ,
@@ -171,9 +146,6 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
         }
     }
 
-    /*//////////////////////////////////////////////////////////////
-                      Mint x Pool 
-    //////////////////////////////////////////////////////////////*/
 
     function _mint(address to, uint256 startInclusive, uint256 endExclusive) internal virtual {
         uint256 numIds = endExclusive - startInclusive;
@@ -322,10 +294,6 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
         // TODO: sync ids for anchor pool (?)
     }
 
-    /*//////////////////////////////////////////////////////////////
-                      Borrow x Margin
-    //////////////////////////////////////////////////////////////*/
-
     function borrow(uint256[] calldata idsToDeposit, uint256 loanDurationInSeconds, address loanOwner) external returns (uint256 loanAmount) {
         
         // Check if loan duration is too long
@@ -411,10 +379,6 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
         interestOwed = (loanAmount * loanDurationInSeconds * INTEREST_NUM) / INTEREST_DENOM;
     }
 
-    /*//////////////////////////////////////////////////////////////
-                   IERC721 Compliance
-    //////////////////////////////////////////////////////////////*/
-
     // TODO
     function tokenURI(uint256) public pure override returns (string memory) {
         return '';
@@ -494,3 +458,4 @@ contract Stronghold is ERC721Minimal, ERC2981, IPairHooks, IConstants {
     function afterTokenWithdrawal(uint256 ) external {}
     function syncForPair(address , uint256 , uint256[] calldata ) external {}
 }
+*/

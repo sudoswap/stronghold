@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.0;
 
+/*
 import {ERC20} from "solmate/tokens/ERC20.sol";
 import {Owned} from "solmate/auth/Owned.sol";
 
@@ -53,3 +54,4 @@ contract FlashLoaner is ERC20, Owned {
     }
 
 }
+*/

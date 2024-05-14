@@ -59,6 +59,7 @@ contract StrongholdETH is ERC721Minimal, ERC2981, IPairHooks, IConstants, Reentr
     error WrongFrom();
     error Unauth();
     error LoanTooLong();
+    error LoanAlreadyExists();
     error TooEarlyToSieze();
 
     /*//////////////////////////////////////////////////////////////
@@ -317,6 +318,10 @@ contract StrongholdETH is ERC721Minimal, ERC2981, IPairHooks, IConstants, Reentr
         // Check if loan duration is too long
         if (loanDurationInSeconds > MAX_LOAN_DURATION) {
             revert LoanTooLong();
+        }
+
+        if (loanForUser[loanOwner].principalOwed != 0) {
+            revert LoanAlreadyExists();
         }
 
         // Take NFTs from caller

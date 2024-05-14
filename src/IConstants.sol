@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0
 
+/* solhint-disable private-vars-leading-underscore */
+/* solhint-disable var-name-mixedcase */
+
 pragma solidity ^0.8.0;
 
 abstract contract IConstants {
