@@ -32,7 +32,7 @@ contract FlashLoanerETH is Owned {
         payable(msg.sender).safeTransferETH(amount);
     }
 
-    function leverage(uint256[] calldata idsToSwapAndLend, uint256 loanDurationInSeconds) payable external {
+    function openLeverage(uint256[] calldata idsToSwapAndLend, uint256 loanDurationInSeconds) payable external {
         
         // Calculate loan amount and swap quote
         // If the loan amount + posted margin amount is not enough, revert
@@ -49,8 +49,17 @@ contract FlashLoanerETH is Owned {
 
         // Approve and open a loan for the caller
         IERC721(address(stronghold)).setApprovalForAll(address(stronghold), true);
-        stronghold.borrow(idsToSwapAndLend, loanDurationInSeconds, msg.sender);
+
+        // Excess ETH goes to flash loaner, but loan is owned by the caller
+        stronghold.borrow(idsToSwapAndLend, loanDurationInSeconds, msg.sender, address(this));
         IERC721(address(stronghold)).setApprovalForAll(address(stronghold), false);
     }
 
+    function getMarginAmount(uint256 numNFTs) view external returns (uint256 marginAmount) {
+        uint256 loanAmount = stronghold.getLoanAmount(numNFTs);
+        (,,, uint256 quoteAmount,,) = tradePool.getBuyNFTQuote(1, numNFTs);
+        marginAmount = quoteAmount - loanAmount;
+    }
+
+    receive() external payable {}
 }

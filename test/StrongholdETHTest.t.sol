@@ -11,7 +11,6 @@ pragma solidity ^0.8.0;
 import "forge-std/Test.sol";
 
 // Sudo specific imports
-import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {LSSVMPairFactory} from "lib/lssvm2/src/LSSVMPairFactory.sol";
 import {RoyaltyEngine} from "lib/lssvm2/src/RoyaltyEngine.sol";
 import {LSSVMPairERC721ETH} from "lib/lssvm2/src/erc721/LSSVMPairERC721ETH.sol";
@@ -26,6 +25,7 @@ import {ICurve} from "lib/lssvm2/src/bonding-curves/ICurve.sol";
 import {Test20} from "./Test20.sol";
 
 import {StrongholdETH} from "../src/StrongholdETH.sol";
+import {FlashLoanerETH} from "../src/FlashLoanerETH.sol";
 import {IConstants} from "../src/IConstants.sol";
 
 contract StrongholdTest is Test, IConstants {
@@ -34,6 +34,7 @@ contract StrongholdTest is Test, IConstants {
     LinearCurve linearCurve;
     XykCurve xykCurve;
     StrongholdETH stronghold;
+    FlashLoanerETH flashLoaner;
 
     address constant ALICE = address(123);
     address constant BOB = address(456);
@@ -148,7 +149,7 @@ contract StrongholdTest is Test, IConstants {
         vm.stopPrank();
     }
 
-     function test_allowedMintFailsIfInsufficientFundsSent() public {
+    function test_allowedMintFailsIfInsufficientFundsSent() public {
 
         // Prank as ALICE
         vm.startPrank(ALICE);
@@ -160,7 +161,6 @@ contract StrongholdTest is Test, IConstants {
         vm.stopPrank();
     }
 
-    // An address not on the list cannot mint 
     function test_mintFailsIfNotOnListBeforeDeadline() public {
 
         // Prank as CAROL
@@ -182,6 +182,19 @@ contract StrongholdTest is Test, IConstants {
             bytes32(0)
         );
         vm.startPrank(CAROL);
+        zeroStronghold.mint{value: INITIAL_LAUNCH_PRICE}(1, proof);
+        vm.stopPrank();
+    }
+
+    function test_disallowedMintSucceedsIfRootIsNonzeroButEnoughTimeHasPassed() public {
+        StrongholdETH zeroStronghold = new StrongholdETH(
+            linearCurve,
+            xykCurve,
+            address(pairFactory),
+            bytes32("1")
+        );
+        vm.startPrank(CAROL);
+        vm.warp(block.timestamp + DELAY_BEFORE_PUBLIC_MINT + 1);
         zeroStronghold.mint{value: INITIAL_LAUNCH_PRICE}(1, proof);
         vm.stopPrank();
     }
@@ -227,9 +240,11 @@ contract StrongholdTest is Test, IConstants {
 
         assertEq(LSSVMPair(stronghold.anchorPool()).spotPrice(), ANCHOR_SPOT_PRICE);
         assertEq(LSSVMPair(stronghold.anchorPool()).delta(), ANCHOR_DELTA);
+        assertEq(stronghold.balanceOf(stronghold.anchorPool()), ANCHOR_INITIAL_SUPPLY);
 
         assertEq(LSSVMPair(stronghold.tradePool()).spotPrice(), TRADE_SPOT_PRICE);
         assertEq(LSSVMPair(stronghold.tradePool()).delta(), TRADE_DELTA);
+        assertEq(stronghold.balanceOf(stronghold.tradePool()), TRADE_INITIAL_SUPPLY);
     }
 
     function test_createPoolsFailBeforeInitialMintComplete() public {
@@ -254,13 +269,15 @@ contract StrongholdTest is Test, IConstants {
     /**
     
             borrowing
-        - user can borrow [ ]
-        - user borrow fails if loan duration is too long [ ]
-        - user cannot borrow more than 1 at a time [ ]
-        - user cannot borrow ids they do not have [ ]
+        - user can borrow [x]
+        - user borrow fails if loan duration is too long [x]
+        - user cannot borrow more than 1 at a time [x]
+        - user cannot borrow ids they do not have [x]
         
-        - user can swap and borrow [ ]
-        - user cannot swap and borrow if it leaves the flash loaner insolvent [ ]
+        - user can swap and borrow [x]
+        - user cannot swap and borrow if it leaves the flash loaner insolvent [ ] (i.e. if they don't put up enough ETH)
+        (assert that prev balance and after balance is the same after a flash swap)
+
         - user can repay loan if late [ ]
         - user can repay loan if early [ ]
         - interest is collected / computed correctly [ ]
@@ -269,20 +286,119 @@ contract StrongholdTest is Test, IConstants {
         - another user cannot liquidate loan if late [ ]
     */
 
-    event Foo(uint256 a);
-
     function test_borrowSucceedsForUser() public {
 
+        // Mint out all NFTs
         _finishMintAndInitPools();
 
-        // Mint out all NFTs
+        // Take a out loan for DAVE, approve ALICE first
+        vm.startPrank(DAVE);
+        stronghold.setApprovalForAll(ALICE, true);
+
+        // Take out loan as ALICE
+        vm.startPrank(ALICE);
+        stronghold.setApprovalForAll(address(stronghold), true);
+        uint256[] memory id = new uint256[](1);
+        stronghold.borrow(id, 1, DAVE, DAVE);
+        vm.stopPrank();
+
+        assertEq(address(DAVE).balance, stronghold.getLoanAmount(1));
+    }
+
+    function test_borrowFailsIfDurationIsTooLong() public {
+         _finishMintAndInitPools();
+
+        // Take a out loan for DAVE, approve ALICE first
+        vm.startPrank(DAVE);
+        stronghold.setApprovalForAll(ALICE, true);
+
+        // Swap to ALICE
         vm.startPrank(ALICE);
 
         // Take a out loan for DAVE
         stronghold.setApprovalForAll(address(stronghold), true);
         uint256[] memory id = new uint256[](1);
-        stronghold.borrow(id, 1, DAVE);
+        
+        vm.expectRevert(StrongholdETH.LoanTooLong.selector);
+        stronghold.borrow(id, MAX_LOAN_DURATION + 1, DAVE, DAVE);
 
-        assertEq(address(DAVE).balance, stronghold.getLoanAmount(1));
+        vm.stopPrank();
     }
+
+    function test_borrowFailsIfLoanAlreadyExists() public {
+        _finishMintAndInitPools();
+
+        vm.startPrank(ALICE);
+
+        // Take a out loan for ALICE for herself
+        stronghold.setApprovalForAll(address(stronghold), true);
+        uint256[] memory id = new uint256[](1);
+        stronghold.borrow(id, 1, ALICE, ALICE);
+
+        // Take out another loan (should fail)
+        id[0] = 1;
+        vm.expectRevert(StrongholdETH.LoanAlreadyExists.selector);
+        stronghold.borrow(id, 1, ALICE, ALICE);
+
+        vm.stopPrank();
+    }
+
+    function test_borrowFailsIfUserDoesNotOwnNFT() public {
+        _finishMintAndInitPools();
+
+        // Take a out loan as BOB
+        vm.startPrank(BOB);
+        stronghold.setApprovalForAll(address(stronghold), true);
+        uint256[] memory id = new uint256[](1);
+        vm.expectRevert();
+        stronghold.borrow(id, 1, BOB, BOB);
+    }
+
+    function test_borrowForOthersFailsIfUserDoesNotApprove() public {
+
+        _finishMintAndInitPools();
+
+        vm.startPrank(ALICE);
+        stronghold.setApprovalForAll(address(stronghold), true);
+        uint256[] memory id = new uint256[](1);
+        vm.expectRevert(StrongholdETH.UnauthLoan.selector);
+        stronghold.borrow(id, 1, BOB, ALICE);
+
+        vm.expectRevert(StrongholdETH.UnauthLoan.selector);
+        stronghold.borrow(id, 1, BOB, BOB);
+    }
+
+    function test_swapBorrowAndBuy() public {
+
+        _finishMintAndInitPools();
+
+        // Init flash loaner with ETH
+        flashLoaner = new FlashLoanerETH(stronghold, LSSVMPair(stronghold.tradePool()));
+        vm.deal(address(flashLoaner), 10 ether);
+
+        // Call flash loaner and margin swap for 1 NFT
+        uint256[] memory ids = new uint256[](1);
+
+        // Get the first ID put into the trade pool
+        ids[0] = INITIAL_LAUNCH_SUPPLY + ANCHOR_INITIAL_SUPPLY + 1;
+
+        uint256 flashLoanerStartBalance = address(flashLoaner).balance;
+
+        // Approve the flash loaner as BOB
+        vm.startPrank(BOB);
+        stronghold.setApprovalForAll(address(flashLoaner), true);
+        flashLoaner.openLeverage{value: flashLoaner.getMarginAmount(1)}(ids, 1);
+
+        uint256 flashLoanerEndBalance = address(flashLoaner).balance;
+
+        // Ensure the end balance is greater
+        assertGtDecimal(flashLoanerEndBalance, flashLoanerStartBalance, 0);
+
+        // Ensure the loan exists
+        (uint256[] memory marginedIds, , , ) = stronghold.getLoanDataForUser(BOB);
+
+        // Check that ids[0] = ids[0]
+        assertEq(marginedIds[0], ids[0]);
+    }
+
 }

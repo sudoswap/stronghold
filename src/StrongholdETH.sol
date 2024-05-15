@@ -14,7 +14,6 @@ import {ICurve} from "lssvm2/bonding-curves/ICurve.sol";
 import {IPairHooks} from "lssvm2/hooks/IPairHooks.sol";
 
 import {ERC2981} from "openzeppelin-contracts/contracts/token/common/ERC2981.sol";
-import {IERC2981} from "openzeppelin-contracts/contracts/interfaces/IERC2981.sol";
 import {IERC721} from "openzeppelin-contracts/contracts/token/ERC721/IERC721.sol";
 import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
@@ -58,6 +57,7 @@ contract StrongholdETH is ERC721Minimal, ERC2981, IPairHooks, IConstants, Reentr
     error NoZero();
     error WrongFrom();
     error Unauth();
+    error UnauthLoan();
     error LoanTooLong();
     error LoanAlreadyExists();
     error TooEarlyToSieze();
@@ -268,7 +268,7 @@ contract StrongholdETH is ERC721Minimal, ERC2981, IPairHooks, IConstants, Reentr
         ));
 
         // Mint to anchor pool
-        _mint(anchorPool, INITIAL_LAUNCH_SUPPLY + 1, INITIAL_LAUNCH_SUPPLY + ANCHOR_INITIAL_SUPPLY);
+        _mint(anchorPool, INITIAL_LAUNCH_SUPPLY, INITIAL_LAUNCH_SUPPLY + ANCHOR_INITIAL_SUPPLY);
 
         // Update total supply
         totalSupply += ANCHOR_INITIAL_SUPPLY;
@@ -301,7 +301,7 @@ contract StrongholdETH is ERC721Minimal, ERC2981, IPairHooks, IConstants, Reentr
         ));
 
         // Mint to trade pool
-        _mint(anchorPool, INITIAL_LAUNCH_SUPPLY + ANCHOR_INITIAL_SUPPLY + 1, INITIAL_LAUNCH_SUPPLY + ANCHOR_INITIAL_SUPPLY + TRADE_INITIAL_SUPPLY);
+        _mint(tradePool, INITIAL_LAUNCH_SUPPLY + ANCHOR_INITIAL_SUPPLY, INITIAL_LAUNCH_SUPPLY + ANCHOR_INITIAL_SUPPLY + TRADE_INITIAL_SUPPLY);
 
         // Update total supply
         totalSupply += TRADE_INITIAL_SUPPLY;
@@ -313,15 +313,21 @@ contract StrongholdETH is ERC721Minimal, ERC2981, IPairHooks, IConstants, Reentr
                       Borrow x Margin
     //////////////////////////////////////////////////////////////*/
 
-    function borrow(uint256[] calldata idsToDeposit, uint256 loanDurationInSeconds, address loanOwner) external nonReentrant returns (uint256 loanAmount) {
+    function borrow(uint256[] calldata idsToDeposit, uint256 loanDurationInSeconds, address loanOwner, address loanRecipient) external nonReentrant returns (uint256 loanAmount) {
         
         // Check if loan duration is too long
         if (loanDurationInSeconds > MAX_LOAN_DURATION) {
             revert LoanTooLong();
         }
 
+        // Can only open loans for a user if they don't have an open loan
         if (loanForUser[loanOwner].principalOwed != 0) {
             revert LoanAlreadyExists();
+        }
+
+        // Can only open loans for a user if they have approved the caller
+        if (loanOwner != msg.sender && !isApprovedForAll[loanOwner][msg.sender]) {
+            revert UnauthLoan();
         }
 
         // Take NFTs from caller
@@ -334,9 +340,9 @@ contract StrongholdETH is ERC721Minimal, ERC2981, IPairHooks, IConstants, Reentr
         loanAmount = getLoanAmount(numToDeposit);
         uint256 interestAmount = getInterestOwed(loanAmount, loanDurationInSeconds);
 
-        // Withdraw and send the loan (minus interest) to the caller
+        // Withdraw and send the loan amount to the caller
         LSSVMPairETH(payable(floorPool)).withdrawETH(loanAmount);
-        payable(loanOwner).safeTransferETH(loanAmount);
+        payable(loanRecipient).safeTransferETH(loanAmount);
 
         // Store the loan data
         loanForUser[loanOwner] = Loan({
@@ -357,7 +363,7 @@ contract StrongholdETH is ERC721Minimal, ERC2981, IPairHooks, IConstants, Reentr
     // Anyone can close an open loan if it's expired and past the grace period
     function seizeLoan(address loanOriginator) external {
 
-        Loan memory userLoan = loanForUser[loanOriginator]; 
+        Loan storage userLoan = loanForUser[loanOriginator]; 
 
         // Can only sieze loan if it's past the expiry + grace period
         if (block.timestamp < userLoan.loanExpiry + LOAN_GRACE_PERIOD) {
@@ -370,7 +376,7 @@ contract StrongholdETH is ERC721Minimal, ERC2981, IPairHooks, IConstants, Reentr
     function _repayLoanForUser(address loanOriginator, address loanCloser) internal {
 
         // Get loan amount owed by loanOriginator
-        Loan memory userLoan = loanForUser[loanOriginator]; 
+        Loan storage userLoan = loanForUser[loanOriginator]; 
         uint256 amountToRepay = userLoan.interestOwed + userLoan.principalOwed;
 
         // Take repayment from loanCloser
@@ -416,7 +422,7 @@ contract StrongholdETH is ERC721Minimal, ERC2981, IPairHooks, IConstants, Reentr
     function supportsInterface(bytes4 interfaceId) public pure override(ERC2981, ERC721Minimal) returns (bool) {
         return interfaceId == 0x01ffc9a7 // ERC165 Interface ID for ERC165
             || interfaceId == 0x80ac58cd // ERC165 Interface ID for ERC721
-            || interfaceId == type(IERC2981).interfaceId // ERC165 interface for IERC2981
+            || interfaceId == 0x2a55205a // ERC165 interface for IERC2981
             || interfaceId == 0x5b5e139f; // ERC165 Interface ID for ERC721Metadata
     }
 
@@ -475,6 +481,16 @@ contract StrongholdETH is ERC721Minimal, ERC2981, IPairHooks, IConstants, Reentr
             ownerOfWithData[id] = OwnerOfWithData({owner: to, lastTransferTimestamp: uint96(timestamp + TRANSFER_DELAY)});
         }
         emit Transfer(from, to, id);
+    }
+
+    function getLoanDataForUser(address user) external view returns (uint256[] memory, uint256, uint256, uint256) {
+        Loan storage l = loanForUser[user];
+        return (
+            l.idsDeposited,
+            l.loanExpiry,
+            l.principalOwed,
+            l.interestOwed
+        );
     }
 
     receive() external payable {}

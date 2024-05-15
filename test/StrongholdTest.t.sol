@@ -6,6 +6,7 @@
 /* solhint-disable no-unused-vars */
 /* solhint-disable func-name-mixedcase */
 
+/*
 pragma solidity ^0.8.0;
 
 import "forge-std/Test.sol";
@@ -110,7 +111,6 @@ contract StrongholdTest is Test, IConstants {
         vm.stopPrank();
     }
 
-    /**
         minting
         - allowed user can mint [x]
         - disallowed user cannot mint [x]
@@ -137,9 +137,7 @@ contract StrongholdTest is Test, IConstants {
         - user can repay loan if early
         - another user can liquidate loan if late
         - another user cannot liquidate loan if late
-     */
 
-    /*
     function test_allowedMintSucceedsWithEnoughBalance() public {
 
         // Prank as ALICE
@@ -261,5 +259,5 @@ contract StrongholdTest is Test, IConstants {
         vm.expectRevert(Stronghold.InitialMintIncomplete.selector);
         stronghold.initTradePool();
     }
-    */
 }
+*/
