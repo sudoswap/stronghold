@@ -270,20 +270,21 @@ contract StrongholdTest is Test, IConstants {
     
             borrowing
         - user can borrow [x]
+        - user can bulk borrow []
         - user borrow fails if loan duration is too long [x]
         - user cannot borrow more than 1 at a time [x]
         - user cannot borrow ids they do not have [x]
         
         - user can swap and borrow [x]
-        - user cannot swap and borrow if it leaves the flash loaner insolvent [ ] (i.e. if they don't put up enough ETH)
+        - user can bulk swap and borrow []
+        - user cannot swap and borrow if it leaves the flash loaner insolvent [x] (i.e. if they don't put up enough ETH)
         (assert that prev balance and after balance is the same after a flash swap)
 
-        - user can repay loan if late [ ]
-        - user can repay loan if early [ ]
-        - interest is collected / computed correctly [ ]
+        - user can repay loan if late [x]
+        - user can repay loan if early [x]
 
+        - another user cannot liquidate loan if early [x]
         - another user can liquidate loan if late [ ]
-        - another user cannot liquidate loan if late [ ]
     */
 
     function test_borrowSucceedsForUser() public {
@@ -401,4 +402,107 @@ contract StrongholdTest is Test, IConstants {
         assertEq(marginedIds[0], ids[0]);
     }
 
+    function test_swapBorrowAndBuyFailsIfInsufficientTokensSent() public {
+
+        _finishMintAndInitPools();
+
+        // Init flash loaner with ETH
+        flashLoaner = new FlashLoanerETH(stronghold, LSSVMPair(stronghold.tradePool()));
+        vm.deal(address(flashLoaner), 10 ether);
+
+        // Call flash loaner and margin swap for 1 NFT
+        uint256[] memory ids = new uint256[](1);
+
+        // Get the first ID put into the trade pool
+        ids[0] = INITIAL_LAUNCH_SUPPLY + ANCHOR_INITIAL_SUPPLY + 1;
+
+        uint256 flashLoanerStartBalance = address(flashLoaner).balance;
+
+        // Approve the flash loaner as BOB
+        vm.startPrank(BOB);
+        stronghold.setApprovalForAll(address(flashLoaner), true);
+        uint256 insufficientAmount = flashLoaner.getMarginAmount(1) - 1;
+        vm.expectRevert(FlashLoanerETH.NotEnoughTokensSent.selector);
+        flashLoaner.openLeverage{value: insufficientAmount}(ids, 1);
+    }
+
+    function test_canBorrowAndRepayEarly() public {
+        // Mint out all NFTs
+        _finishMintAndInitPools();
+
+        // Take a out loan for ALICE
+        vm.startPrank(ALICE);
+        stronghold.setApprovalForAll(address(stronghold), true);
+        uint256[] memory id = new uint256[](1);
+        uint256 loanDuration = 24 hours;
+        stronghold.borrow(id, loanDuration, ALICE, ALICE);
+
+        // Wait loan duration, then repay
+        vm.warp(block.timestamp + loanDuration);
+        (, , uint256 principal, uint256 interest) = stronghold.getLoanDataForUser(ALICE);
+        stronghold.repay{value: principal + interest}();
+    }
+
+    function test_canBorrowAndRepayLate() public {
+        // Mint out all NFTs
+        _finishMintAndInitPools();
+
+        // Take a out loan for ALICE
+        vm.startPrank(ALICE);
+        stronghold.setApprovalForAll(address(stronghold), true);
+        uint256[] memory id = new uint256[](1);
+        uint256 loanDuration = 24 hours;
+        stronghold.borrow(id, loanDuration, ALICE, ALICE);
+
+        // Wait loan duration, then repay
+        vm.warp(block.timestamp + loanDuration + 1);
+        (, , uint256 principal, uint256 interest) = stronghold.getLoanDataForUser(ALICE);
+        stronghold.repay{value: principal + interest}();
+    }
+    
+    function test_seizeBorrowFailsIfTooEarly() public {
+        // Mint out all NFTs
+        _finishMintAndInitPools();
+
+        // Take a out loan for ALICE
+        vm.startPrank(ALICE);
+        stronghold.setApprovalForAll(address(stronghold), true);
+        uint256[] memory id = new uint256[](1);
+        uint256 loanDuration = 24 hours;
+        stronghold.borrow(id, loanDuration, ALICE, ALICE);
+
+        // Wait loan duration, then attempt to repay
+        vm.warp(block.timestamp + loanDuration);
+        vm.startPrank(BOB);
+        (, , uint256 principal, uint256 interest) = stronghold.getLoanDataForUser(ALICE);
+        vm.expectRevert(StrongholdETH.TooEarlyToSeize.selector);
+        stronghold.seizeLoan{value: principal + interest}(ALICE);
+    }
+
+    function test_seizeBorrowSucceeds() public {
+        // Mint out all NFTs
+        _finishMintAndInitPools();
+
+        // Take a out loan for ALICE
+        vm.startPrank(ALICE);
+        stronghold.setApprovalForAll(address(stronghold), true);
+        uint256[] memory id = new uint256[](1);
+        uint256 loanDuration = 24 hours;
+        stronghold.borrow(id, loanDuration, ALICE, ALICE);
+
+        // Wait loan duration, then attempt to repay
+        vm.warp(block.timestamp + loanDuration + LOAN_GRACE_PERIOD + 1);
+        vm.startPrank(BOB);
+        (uint256[] memory ids, , uint256 principal, uint256 interest) = stronghold.getLoanDataForUser(ALICE);
+        stronghold.seizeLoan{value: principal + interest}(ALICE);
+
+        // Assert BOB owns the seized id now
+        assertEq(stronghold.ownerOf(ids[0]), BOB);
+
+        // Assert the loan is cleared
+        (ids, , principal, interest) = stronghold.getLoanDataForUser(ALICE);
+        assertEq(principal, 0);
+        assertEq(interest, 0);
+        assertEq(ids.length, 0);
+    }
 }

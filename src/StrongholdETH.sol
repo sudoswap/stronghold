@@ -60,7 +60,7 @@ contract StrongholdETH is ERC721Minimal, ERC2981, IPairHooks, IConstants, Reentr
     error UnauthLoan();
     error LoanTooLong();
     error LoanAlreadyExists();
-    error TooEarlyToSieze();
+    error TooEarlyToSeize();
 
     /*//////////////////////////////////////////////////////////////
                        Events
@@ -361,13 +361,13 @@ contract StrongholdETH is ERC721Minimal, ERC2981, IPairHooks, IConstants, Reentr
     }
 
     // Anyone can close an open loan if it's expired and past the grace period
-    function seizeLoan(address loanOriginator) external {
+    function seizeLoan(address loanOriginator) payable external {
 
         Loan storage userLoan = loanForUser[loanOriginator]; 
 
-        // Can only sieze loan if it's past the expiry + grace period
+        // Can only seize loan if it's past the expiry + grace period
         if (block.timestamp < userLoan.loanExpiry + LOAN_GRACE_PERIOD) {
-            revert TooEarlyToSieze();
+            revert TooEarlyToSeize();
         }
 
         _repayLoanForUser(loanOriginator, msg.sender);
