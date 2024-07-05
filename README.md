@@ -12,6 +12,8 @@ NFTs are backed by an ever-growing reserve of tokens.
 
 ## Future Components
 
-supply caps for both to prevent griefing
+- supply caps for both to prevent griefing
 - lock-in sell price: put options
 - borrow NFTs against TWAP: shorting
+- bonding tokens for NFTs against TWAP, dutch auction for discount up to some % above backing
+    - locked NFTs can still be borrowed against
